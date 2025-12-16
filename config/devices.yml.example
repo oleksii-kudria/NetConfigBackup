@@ -1,0 +1,12 @@
+# Example inventory without sensitive data
+# Copy to config/devices.yml and fill with real device details.
+
+cisco:
+  - name: core-switch
+    host: 192.0.2.10
+    port: 22
+
+mikrotik:
+  - name: edge-router
+    host: 198.51.100.5
+    port: 22
