@@ -24,3 +24,19 @@ Baseline project structure for backing up Cisco and MikroTik network device conf
    ```bash
    python3 scripts/run.py --help
    ```
+
+## Devices inventory schema
+`config/devices.yml` stores every device in a single `devices` list and does **not**
+contain passwords. Secrets are pulled via `auth.secret_ref` from `config/secrets.yml`.
+
+Each device entry uses the following fields:
+- `name` *(string, required)*: Unique identifier used in logs and backup paths.
+- `vendor` *(required)*: Either `cisco` or `mikrotik`.
+- `model` *(string, required)*: Device model for metadata.
+- `host` *(string, required)*: IP address or DNS name.
+- `port` *(integer, optional)*: SSH port, defaults to `22`.
+- `username` *(string, required)*: Login user.
+- `auth.secret_ref` *(string, required)*: Key that matches a device entry in `secrets.yml`.
+- `backup.type` *(required)*: `running-config` for Cisco devices or `export` for MikroTik devices.
+
+Refer to `config/devices.yml.example` for a complete, non-sensitive example.
