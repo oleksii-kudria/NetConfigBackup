@@ -20,9 +20,8 @@ from app.core.config import load_devices  # noqa: E402
 from app.core.logging import setup_logging  # noqa: E402
 from app.core.models import Device  # noqa: E402
 from app.core.secrets import SecretNotFoundError, get_password  # noqa: E402
-from app.core.storage import load_local_config, resolve_backup_dir  # noqa: E402
-from app.mikrotik.backup import backup_device as backup_mikrotik  # noqa: E402
-from app.mikrotik.client import MikroTikClient  # noqa: E402
+from app.core.storage import load_local_config, resolve_backup_dir, save_backup_text  # noqa: E402
+from app.mikrotik.backup import fetch_export  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,9 +127,10 @@ def _process_device_backup(device: Device, backup_dir: Path, logger: logging.Log
             output_path = _device_output_path(backup_dir, device, "running-config")
             backup_path = backup_cisco(client, output_path)
         else:
-            client = MikroTikClient(host=device.host, username=device.username, password=password)
-            output_path = _device_output_path(backup_dir, device, "export")
-            backup_path = backup_mikrotik(client, output_path)
+            logger.info(
+                "start backup device=%s host=%s", device.name, device.host, extra={"device": device.name}
+            )
+            backup_path = _backup_mikrotik_device(device, password, backup_dir, logger)
     except Exception:
         logger.exception("Backup failed for device.", extra={"device": device.name})
         return
@@ -142,6 +142,52 @@ def _device_output_path(base_dir: Path, device: Device, suffix: str) -> Path:
     """Create a deterministic backup path for a device."""
 
     return base_dir / device.name / f"{suffix}.txt"
+
+
+def _backup_mikrotik_device(device: Device, password: str, backup_dir: Path, logger: logging.Logger) -> Path:
+    log_extra = {"device": device.name}
+    if not _tcp_check(device.host, device.port, timeout=5):
+        logger.error(
+            "tcp_check fail host=%s port=%s", device.host, device.port, extra=log_extra
+        )
+        raise ConnectionError(f"TCP check failed for {device.host}:{device.port}")
+
+    logger.info("tcp_check ok host=%s port=%s", device.host, device.port, extra=log_extra)
+
+    export_text = fetch_export(device, password, logger)
+
+    if not export_text.strip():
+        raise ValueError("Empty export received from device")
+
+    timestamp = _timestamp()
+    filename = f"{timestamp}_export.rsc"
+    metadata = {
+        "device": device.name,
+        "vendor": device.vendor,
+        "model": device.model,
+        "host": device.host,
+        "backup_time": timestamp,
+    }
+
+    return save_backup_text(backup_dir, "mikrotik", device.name, filename, export_text, logger, metadata)
+
+
+def _tcp_check(host: str, port: int, timeout: float = 3.0) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        try:
+            sock.connect((host, port))
+            return True
+        except OSError:
+            return False
+
+
+def _timestamp() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
 
 
 if __name__ == "__main__":

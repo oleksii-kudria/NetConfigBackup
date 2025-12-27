@@ -13,6 +13,17 @@ FALLBACK_BACKUP_DIR = PROJECT_ROOT / "backup"
 DEFAULT_LOCAL_CONFIG = PROJECT_ROOT / "config" / "local.yml"
 
 
+def _format_metadata(metadata: Mapping[str, Any]) -> str:
+    if not metadata:
+        return ""
+
+    lines = ["# backup_metadata"]
+    for key, value in metadata.items():
+        lines.append(f"# {key}: {value}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def ensure_directory(path: Path) -> Path:
     """Ensure the target directory exists and return it."""
 
@@ -26,6 +37,27 @@ def write_backup(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def save_backup_text(
+    backup_dir: Path,
+    vendor: str,
+    device_name: str,
+    filename: str,
+    content: str,
+    logger: logging.Logger,
+    metadata: Mapping[str, Any] | None = None,
+) -> Path:
+    """Persist backup content to a structured path and return the saved file path."""
+
+    target_dir = backup_dir / vendor / device_name
+    ensure_directory(target_dir)
+
+    backup_path = target_dir / filename
+    meta_header = _format_metadata(metadata or {})
+    backup_path.write_text(meta_header + content, encoding="utf-8")
+    logger.info("saved path=%s", backup_path, extra={"device": device_name})
+    return backup_path
 
 
 def load_local_config(config_path: str | Path | None = None) -> Mapping[str, Any] | None:
