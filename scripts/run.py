@@ -20,7 +20,7 @@ from app.core.config import load_devices  # noqa: E402
 from app.core.logging import setup_logging  # noqa: E402
 from app.core.models import Device  # noqa: E402
 from app.core.secrets import SecretNotFoundError, get_password  # noqa: E402
-from app.core.storage import ensure_directory  # noqa: E402
+from app.core.storage import load_local_config, resolve_backup_dir  # noqa: E402
 from app.mikrotik.backup import backup_device as backup_mikrotik  # noqa: E402
 from app.mikrotik.client import MikroTikClient  # noqa: E402
 
@@ -49,8 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--backup-dir",
         type=Path,
-        default=ROOT_DIR / "backups",
-        help="Directory where backup files will be written",
+        default=None,
+        help="Directory where backup files will be written. Overrides config/local.yml.",
     )
 
     subcommands = parser.add_subparsers(dest="command", title="commands")
@@ -101,11 +101,12 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         logger.info("Dry run requested. Devices to process: %s", [d.name for d in devices])
         return 0
 
-    ensure_directory(Path(args.backup_dir))
+    local_config = load_local_config(ROOT_DIR / "config" / "local.yml")
+    backup_dir = resolve_backup_dir(args.backup_dir, local_config, logger)
     logger.info("Starting backup for %d device(s).", len(devices))
 
     for device in devices:
-        _process_device_backup(device, Path(args.backup_dir), logger)
+        _process_device_backup(device, backup_dir, logger)
 
     return 0
 

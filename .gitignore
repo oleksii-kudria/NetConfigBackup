@@ -17,6 +17,7 @@ config/local.yml
 
 # Backup artifacts
 backups/
+backup/
 
 # Editor / OS files
 .DS_Store
