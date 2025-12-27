@@ -1,10 +1,10 @@
 """Central logging configuration for NetConfigBackup.
 
-This module reads the optional ``config/logging.yml`` file to determine where
-logs should be written and which verbosity level to use. If the configured
-directory is not writable, it falls back to ``./logs`` while recording a
-warning. Secrets are scrubbed from log messages and the ``device`` context is
-always present to satisfy the required format.
+This module reads the optional ``config/local.yml`` file (``logging`` section)
+to determine where logs should be written and which verbosity level to use. If
+the configured directory is not writable, it falls back to ``./logs`` while
+recording a warning. Secrets are scrubbed from log messages and the ``device``
+context is always present to satisfy the required format.
 """
 
 from __future__ import annotations
@@ -18,10 +18,11 @@ from typing import Any, Mapping
 
 import yaml
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DIRECTORY = Path("/var/log/netconfigbackup")
 DEFAULT_FILENAME = "netconfigbackup.log"
 DEFAULT_LEVEL = logging.INFO
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "logging.yml"
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "local.yml"
 FALLBACK_DIRECTORY = Path("./logs")
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | device=%(device)s | %(message)s"
@@ -30,7 +31,7 @@ LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 @dataclass(slots=True)
 class LoggingConfig:
-    """Configuration values loaded from logging.yml or defaults."""
+    """Configuration values loaded from local.yml or defaults."""
 
     directory: Path
     filename: str
@@ -110,6 +111,13 @@ def _parse_logging_config(config_path: Path) -> tuple[LoggingConfig, bool]:
     return LoggingConfig(directory=directory, filename=filename, level=level), missing_file
 
 
+def _resolve_config_path(config_path: str | Path) -> Path:
+    candidate = Path(config_path)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate
+
+
 def _ensure_writable_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     probe = path / ".write-test"
@@ -143,17 +151,17 @@ def _build_handlers(log_path: Path) -> list[logging.Handler]:
     return [file_handler, stream_handler]
 
 
-def setup_logging(config_path: str | None = None) -> logging.Logger:
+def setup_logging(config_path: str | Path = "config/local.yml") -> logging.Logger:
     """Configure application-wide logging.
 
     Parameters
     ----------
     config_path:
-        Optional path to ``logging.yml``. Defaults to ``config/logging.yml``
+        Optional path to ``local.yml``. Defaults to ``config/local.yml``
         relative to the project root when not provided.
     """
 
-    config_file = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
+    config_file = _resolve_config_path(config_path) if config_path else DEFAULT_CONFIG_PATH
     config, missing_file = _parse_logging_config(config_file)
     log_directory, used_fallback = _determine_log_directory(config.directory, FALLBACK_DIRECTORY)
     log_path = log_directory / config.filename
@@ -171,7 +179,8 @@ def setup_logging(config_path: str | None = None) -> logging.Logger:
 
     if missing_file:
         logger.info(
-            "Logging configuration file not found. Using defaults (directory=%s, level=%s).",
+            "Logging configuration file '%s' not found. Using defaults (directory=%s, level=%s).",
+            config_file,
             config.directory,
             logging.getLevelName(config.level),
         )
