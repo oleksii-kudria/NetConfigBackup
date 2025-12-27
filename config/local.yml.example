@@ -2,3 +2,6 @@ logging:
   directory: /var/log/netconfigbackup
   filename: netconfigbackup.log
   level: INFO
+
+backup:
+  directory: /path/to/backups
