@@ -33,6 +33,53 @@ class MikroTikClient:
     port: int = 22
     timeout: float = 5.0
 
+    def verify_binary_backup(
+        self, path: Path, logger: logging.Logger, log_extra: dict[str, Any]
+    ) -> int:
+        """Ensure downloaded binary backup exists and is non-empty.
+
+        Returns the file size when verification succeeds, otherwise 0.
+        """
+
+        if not path.exists():
+            logger.error("binary-backup verification failed reason=missing", extra=log_extra)
+            return 0
+
+        size = path.stat().st_size
+        if size <= 0:
+            logger.error("binary-backup verification failed reason=zero-size", extra=log_extra)
+            return 0
+
+        logger.info("binary-backup verification passed size=%d", size, extra=log_extra)
+        return size
+
+    def cleanup_remote_backup(
+        self, ssh_client: paramiko.SSHClient, filename: str, logger: logging.Logger, log_extra: dict[str, Any]
+    ) -> bool:
+        """Remove backup file from MikroTik device without failing the backup process."""
+
+        command = f"/file remove {filename}"
+        logger.debug("executing mikrotik command='%s'", command, extra=log_extra)
+        try:
+            _, error_output, exit_status = self._run_command(ssh_client, command)
+        except MikroTikCommandError:
+            logger.warning("binary-backup remote file kept for manual recovery", extra=log_extra)
+            return False
+
+        if exit_status != 0:
+            logger.warning("binary-backup remote file kept for manual recovery", extra=log_extra)
+            logger.debug(
+                "remote cleanup failed file=%s status=%s error_output='%s'",
+                filename,
+                exit_status,
+                error_output,
+                extra=log_extra,
+            )
+            return False
+
+        logger.info("binary-backup remote file removed file=%s", filename, extra=log_extra)
+        return True
+
     def fetch_export(self, logger: logging.Logger, log_extra: dict[str, Any]) -> str:
         """Retrieve the export configuration from the device."""
 
@@ -156,12 +203,15 @@ class MikroTikClient:
                 )
                 raise MikroTikClientError("Unable to download system backup") from exc
 
-            local_size = destination.stat().st_size
+            logger.info("binary-backup downloaded path=%s", destination, extra=log_extra)
+
+            local_size = self.verify_binary_backup(destination, logger, log_extra)
             if local_size <= 0:
-                logger.error("system-backup saved empty path=%s size=%d", destination, local_size, extra=log_extra)
-                raise MikroTikClientError("Downloaded backup file is empty")
+                logger.warning("binary-backup remote file kept for manual recovery", extra=log_extra)
+                raise MikroTikClientError("Downloaded backup file failed verification")
 
             logger.info("system-backup saved path=%s size=%d", destination, local_size, extra=log_extra)
+            self.cleanup_remote_backup(client, remote_filename, logger, log_extra)
             return destination
         finally:
             if sftp is not None:
