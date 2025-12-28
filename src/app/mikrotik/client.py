@@ -55,50 +55,6 @@ class MikroTikClient:
         logger.info("binary-backup verification passed size=%d", size, extra=log_extra)
         return size
 
-    def cleanup_remote_backup(
-        self, ssh_client: paramiko.SSHClient, filename: str, logger: logging.Logger, log_extra: dict[str, Any]
-    ) -> bool:
-        """Remove backup file from MikroTik device without failing the backup process."""
-
-<<<<<<< HEAD
-        log_extra = sanitize_log_extra(log_extra)
-        filename = str(filename).strip().strip("\"")
-        logger.debug("remote filename repr=%r", filename, extra=log_extra)
-=======
-        find_command = f'/file find name="{filename}"'
-        logger.debug("executing mikrotik command='%s'", find_command, extra=log_extra)
-        try:
-            find_output, find_error_output, find_exit_status = self._run_command(ssh_client, find_command)
-        except MikroTikCommandError as exc:
-            logger.warning("failed to remove remote file filename=%s error=%s", filename, exc, extra=log_extra)
-            return False
-
-        if find_exit_status != 0:
-            error_message = find_error_output or f"exit_status={find_exit_status}"
-            logger.warning("failed to remove remote file filename=%s error=%s", filename, error_message, extra=log_extra)
-            return False
-
-        if not find_output.split():
-            logger.debug("remote file not found, nothing to remove filename=%s", filename, extra=log_extra)
-            return True
->>>>>>> parent of 173a0da (Merge pull request #15 from oleksii-kudria/codex/remove-mikrotik-without-precheck)
-
-        command = f'/file remove [find name="{filename}"]'
-        logger.debug("executing mikrotik command='%s'", command, extra=log_extra)
-        try:
-            _, error_output, exit_status = self._run_command(ssh_client, command)
-        except MikroTikCommandError as exc:
-            logger.warning("failed to remove remote file filename=%s error=%s", filename, exc, extra=log_extra)
-            return False
-
-        if exit_status != 0:
-            error_message = error_output or f"exit_status={exit_status}"
-            logger.warning("failed to remove remote file filename=%s error=%s", filename, error_message, extra=log_extra)
-            return False
-
-        logger.info("remote file removed filename=%s", filename, extra=log_extra)
-        return True
-
     def fetch_export(self, logger: logging.Logger, log_extra: dict[str, Any]) -> str:
         """Retrieve the export configuration from the device."""
 
@@ -238,7 +194,9 @@ class MikroTikClient:
                 raise MikroTikClientError("Downloaded backup file failed verification")
 
             logger.info("system-backup saved path=%s size=%d", destination, local_size, extra=log_extra)
-            self.cleanup_remote_backup(client, remote_filename, logger, log_extra)
+            logger.info(
+                "remote cleanup disabled; file kept on device file=%s", remote_filename, extra=log_extra
+            )
             return destination
         finally:
             if sftp is not None:
