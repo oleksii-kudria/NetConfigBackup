@@ -5,3 +5,6 @@ logging:
 
 backup:
   directory: /path/to/backups
+
+mikrotik:
+  system_backup: false

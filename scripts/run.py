@@ -7,6 +7,7 @@ import argparse
 import logging
 import sys
 from collections import Counter
+from typing import Mapping
 from pathlib import Path
 
 # Ensure src/ is on sys.path for local imports when running as a script
@@ -68,6 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show what would be backed up without connecting to devices",
     )
+    backup_parser.add_argument(
+        "--mikrotik-system-backup",
+        action="store_true",
+        default=None,
+        help="Enable MikroTik binary system backup via /system backup save",
+    )
 
     return parser
 
@@ -121,15 +128,18 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
     )
     backup_dir = resolve_backup_dir(args.backup_dir, local_config, logger)
+    system_backup_enabled = _resolve_mikrotik_system_backup(args.mikrotik_system_backup, local_config, logger)
     logger.info("Starting backup for %d device(s).", len(devices))
 
     for device in devices:
-        _process_device_backup(device, backup_dir, logger)
+        _process_device_backup(device, backup_dir, logger, system_backup_enabled)
 
     return 0
 
 
-def _process_device_backup(device: Device, backup_dir: Path, logger: logging.Logger) -> None:
+def _process_device_backup(
+    device: Device, backup_dir: Path, logger: logging.Logger, system_backup_enabled: bool
+) -> None:
     """Handle backup for a single device with logging."""
 
     log_extra = {"device": device.name}
@@ -158,7 +168,9 @@ def _process_device_backup(device: Device, backup_dir: Path, logger: logging.Log
             logger.info(
                 "start backup device=%s host=%s", device.name, device.host, extra=log_extra
             )
-            backup_path = _backup_mikrotik_device(device, password, backup_dir, logger)
+            backup_path = _backup_mikrotik_device(
+                device, password, backup_dir, logger, system_backup_enabled
+            )
     except Exception:
         logger.exception("Backup failed for device.", extra=log_extra)
         return
@@ -172,7 +184,9 @@ def _device_output_path(base_dir: Path, device: Device, suffix: str) -> Path:
     return base_dir / device.name / f"{suffix}.txt"
 
 
-def _backup_mikrotik_device(device: Device, password: str, backup_dir: Path, logger: logging.Logger) -> Path:
+def _backup_mikrotik_device(
+    device: Device, password: str, backup_dir: Path, logger: logging.Logger, system_backup_enabled: bool
+) -> Path:
     log_extra = {"device": device.name}
     logger.debug(
         "checking tcp connectivity host=%s port=%s timeout=%s", device.host, device.port, 5, extra=log_extra
@@ -207,12 +221,57 @@ def _backup_mikrotik_device(device: Device, password: str, backup_dir: Path, log
     saved_path = save_backup_text(backup_dir, "mikrotik", device.name, filename, export_text, logger, metadata)
     log_mikrotik_diff(saved_path, logger, log_extra)
 
+    if not system_backup_enabled:
+        logger.info("mikrotik system-backup disabled (skipping) device=%s", device.name, extra=log_extra)
+        return saved_path
+
     try:
         perform_system_backup(device, password, timestamp, backup_dir, logger)
     except Exception:
         logger.exception("system-backup failed", extra=log_extra)
 
     return saved_path
+
+
+def _resolve_mikrotik_system_backup(
+    cli_flag: bool | None, local_config: Mapping[str, object] | None, logger: logging.Logger
+) -> bool:
+    """Determine whether MikroTik system backup is enabled.
+
+    Priority: CLI flag > local.yml > default False.
+    """
+
+    local_value = _extract_mikrotik_system_backup(local_config)
+    if cli_flag is True:
+        enabled = True
+        source = "cli"
+    elif isinstance(local_value, bool):
+        enabled = local_value
+        source = "local_yml"
+    else:
+        enabled = False
+        source = "default"
+
+    logger.debug(
+        "mikrotik system-backup resolved enabled=%s source=%s cli_flag=%s local_yml=%s",
+        enabled,
+        source,
+        cli_flag,
+        local_value,
+    )
+    return enabled
+
+
+def _extract_mikrotik_system_backup(local_config: Mapping[str, object] | None) -> bool | None:
+    if not isinstance(local_config, Mapping):
+        return None
+
+    mikrotik_section = local_config.get("mikrotik")
+    if not isinstance(mikrotik_section, Mapping):
+        return None
+
+    value = mikrotik_section.get("system_backup")
+    return value if isinstance(value, bool) else None
 
 
 def _tcp_check(host: str, port: int, timeout: float = 3.0) -> bool:
