@@ -151,7 +151,9 @@ def _build_handlers(log_path: Path) -> list[logging.Handler]:
     return [file_handler, stream_handler]
 
 
-def setup_logging(config_path: str | Path = "config/local.yml") -> logging.Logger:
+def setup_logging(
+    config_path: str | Path = "config/local.yml", cli_level: int | None = None
+) -> logging.Logger:
     """Configure application-wide logging.
 
     Parameters
@@ -159,22 +161,26 @@ def setup_logging(config_path: str | Path = "config/local.yml") -> logging.Logge
     config_path:
         Optional path to ``local.yml``. Defaults to ``config/local.yml``
         relative to the project root when not provided.
+    cli_level:
+        Logging level provided by the CLI. When set, this value overrides any
+        level from configuration files and defaults.
     """
 
     config_file = _resolve_config_path(config_path) if config_path else DEFAULT_CONFIG_PATH
     config, missing_file = _parse_logging_config(config_file)
+    effective_level = cli_level if cli_level is not None else config.level
     log_directory, used_fallback = _determine_log_directory(config.directory, FALLBACK_DIRECTORY)
     log_path = log_directory / config.filename
 
     handlers = _build_handlers(log_path)
     root_logger = logging.getLogger()
     root_logger.handlers.clear()
-    root_logger.setLevel(config.level)
+    root_logger.setLevel(effective_level)
     for handler in handlers:
         root_logger.addHandler(handler)
 
     logger = logging.getLogger("netconfigbackup")
-    logger.setLevel(config.level)
+    logger.setLevel(effective_level)
     logger.propagate = True
 
     if missing_file:
@@ -182,7 +188,7 @@ def setup_logging(config_path: str | Path = "config/local.yml") -> logging.Logge
             "Logging configuration file '%s' not found. Using defaults (directory=%s, level=%s).",
             config_file,
             config.directory,
-            logging.getLevelName(config.level),
+            logging.getLevelName(effective_level),
         )
 
     if used_fallback:
@@ -192,5 +198,12 @@ def setup_logging(config_path: str | Path = "config/local.yml") -> logging.Logge
             log_directory,
         )
 
-    logger.info("Logging initialized at %s", log_path)
+    if cli_level is not None:
+        logger.debug(
+            "Logging level overridden by CLI to %s (config=%s).",
+            logging.getLevelName(effective_level),
+            logging.getLevelName(config.level),
+        )
+
+    logger.info("Logging initialized at %s level=%s", log_path, logging.getLevelName(effective_level))
     return logger

@@ -36,16 +36,25 @@ class MikroTikClient:
         """Retrieve the export configuration from the device."""
 
         commands = ("/export show-sensitive=false", "/export")
+        logger.debug(
+            "connecting to device=%s host=%s port=%s",
+            log_extra.get("device", "-"),
+            self.host,
+            self.port,
+            extra=log_extra,
+        )
         client = self._connect(logger, log_extra)
         try:
             last_error: str | None = None
             for command in commands:
+                logger.debug("executing command='%s'", command, extra=log_extra)
                 output, error_output, exit_status = self._run_command(client, command)
                 if exit_status == 0 and output.strip():
                     if command != commands[0]:
                         logger.info(
                             "export fallback command=%s exit_status=%s", command, exit_status, extra=log_extra
                         )
+                    logger.debug("export received bytes=%d", len(output.encode("utf-8")), extra=log_extra)
                     return output
 
                 last_error = error_output or f"exit_status={exit_status}"
@@ -62,6 +71,7 @@ class MikroTikClient:
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         try:
+            logger.debug("opening ssh session host=%s port=%s", self.host, self.port, extra=log_extra)
             ssh.connect(
                 self.host,
                 port=self.port,

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections import Counter
 from pathlib import Path
 
 # Ensure src/ is on sys.path for local imports when running as a script
@@ -51,6 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Directory where backup files will be written. Overrides config/local.yml.",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug-level logging for troubleshooting. Overrides config/local.yml logging.level.",
+    )
 
     subcommands = parser.add_subparsers(dest="command", title="commands")
 
@@ -68,10 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the CLI."""
-    logger = setup_logging()
-    logger.info("NetConfigBackup run started.")
     parser = build_parser()
     args = parser.parse_args(argv)
+    logger = setup_logging(cli_level=logging.DEBUG if args.debug else None)
+    logger.info("NetConfigBackup run started.")
 
     if args.command is None:
         parser.print_help()
@@ -90,17 +96,30 @@ def main(argv: list[str] | None = None) -> int:
 def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
     """Execute the backup workflow for all configured devices."""
 
+    config_path = Path(args.config)
+    logger.debug("loading devices from %s", config_path)
     try:
-        devices = load_devices(Path(args.config))
+        devices = load_devices(config_path)
     except Exception:
         logger.exception("Failed to load devices configuration.", extra={"device": "-"})
         return 1
+
+    logger.debug("total devices loaded=%d", len(devices))
+    for vendor, count in sorted(Counter(device.vendor for device in devices).items()):
+        logger.debug("%s devices selected=%d", vendor, count)
 
     if args.dry_run:
         logger.info("Dry run requested. Devices to process: %s", [d.name for d in devices])
         return 0
 
-    local_config = load_local_config(ROOT_DIR / "config" / "local.yml")
+    local_config_path = ROOT_DIR / "config" / "local.yml"
+    local_config = load_local_config(local_config_path, logger)
+    if local_config is not None:
+        logger.debug("local config loaded from %s", local_config_path)
+
+    logger.debug(
+        "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
+    )
     backup_dir = resolve_backup_dir(args.backup_dir, local_config, logger)
     logger.info("Starting backup for %d device(s).", len(devices))
 
@@ -113,29 +132,38 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
 def _process_device_backup(device: Device, backup_dir: Path, logger: logging.Logger) -> None:
     """Handle backup for a single device with logging."""
 
-    logger.info("Beginning processing for device.", extra={"device": device.name})
+    log_extra = {"device": device.name}
+    logger.info("Beginning processing for device.", extra=log_extra)
+    logger.debug(
+        "preparing backup for device=%s vendor=%s host=%s port=%s",
+        device.name,
+        device.vendor,
+        device.host,
+        device.port,
+        extra=log_extra,
+    )
 
     try:
         password = get_password(device.auth.secret_ref)
     except SecretNotFoundError:
-        logger.error("Skipping device due to missing secret.", extra={"device": device.name})
+        logger.error("Skipping device due to missing secret.", extra=log_extra)
         return
 
     try:
         if device.vendor == "cisco":
             client = CiscoClient(host=device.host, username=device.username, password=password)
             output_path = _device_output_path(backup_dir, device, "running-config")
-            backup_path = backup_cisco(client, output_path)
+            backup_path = backup_cisco(client, output_path, logger, log_extra)
         else:
             logger.info(
-                "start backup device=%s host=%s", device.name, device.host, extra={"device": device.name}
+                "start backup device=%s host=%s", device.name, device.host, extra=log_extra
             )
             backup_path = _backup_mikrotik_device(device, password, backup_dir, logger)
     except Exception:
-        logger.exception("Backup failed for device.", extra={"device": device.name})
+        logger.exception("Backup failed for device.", extra=log_extra)
         return
 
-    logger.info("Backup completed successfully at %s", backup_path, extra={"device": device.name})
+    logger.info("Backup completed successfully at %s", backup_path, extra=log_extra)
 
 
 def _device_output_path(base_dir: Path, device: Device, suffix: str) -> Path:
@@ -146,6 +174,9 @@ def _device_output_path(base_dir: Path, device: Device, suffix: str) -> Path:
 
 def _backup_mikrotik_device(device: Device, password: str, backup_dir: Path, logger: logging.Logger) -> Path:
     log_extra = {"device": device.name}
+    logger.debug(
+        "checking tcp connectivity host=%s port=%s timeout=%s", device.host, device.port, 5, extra=log_extra
+    )
     if not _tcp_check(device.host, device.port, timeout=5):
         logger.error(
             "tcp_check fail host=%s port=%s", device.host, device.port, extra=log_extra
@@ -155,6 +186,7 @@ def _backup_mikrotik_device(device: Device, password: str, backup_dir: Path, log
     logger.info("tcp_check ok host=%s port=%s", device.host, device.port, extra=log_extra)
 
     export_text = fetch_export(device, password, logger)
+    logger.debug("export received bytes=%d", len(export_text.encode("utf-8")), extra=log_extra)
 
     if not export_text.strip():
         raise ValueError("Empty export received from device")
@@ -168,6 +200,9 @@ def _backup_mikrotik_device(device: Device, password: str, backup_dir: Path, log
         "host": device.host,
         "backup_time": timestamp,
     }
+
+    target_path = backup_dir / "mikrotik" / device.name / filename
+    logger.debug("saving backup to %s", target_path, extra=log_extra)
 
     return save_backup_text(backup_dir, "mikrotik", device.name, filename, export_text, logger, metadata)
 
