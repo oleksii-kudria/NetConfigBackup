@@ -35,7 +35,7 @@ class MikroTikClient:
     def fetch_export(self, logger: logging.Logger, log_extra: dict[str, Any]) -> str:
         """Retrieve the export configuration from the device."""
 
-        commands = ("/export show-sensitive=false", "/export")
+        command = "/export"
         logger.debug(
             "connecting to device=%s host=%s port=%s",
             log_extra.get("device", "-"),
@@ -45,24 +45,15 @@ class MikroTikClient:
         )
         client = self._connect(logger, log_extra)
         try:
-            last_error: str | None = None
-            for command in commands:
-                logger.debug("executing command='%s'", command, extra=log_extra)
-                output, error_output, exit_status = self._run_command(client, command)
-                if exit_status == 0 and output.strip():
-                    if command != commands[0]:
-                        logger.info(
-                            "export fallback command=%s exit_status=%s", command, exit_status, extra=log_extra
-                        )
-                    logger.debug("export received bytes=%d", len(output.encode("utf-8")), extra=log_extra)
-                    return output
+            logger.debug("executing mikrotik command='%s'", command, extra=log_extra)
+            output, error_output, exit_status = self._run_command(client, command)
+            if exit_status == 0 and output.strip():
+                logger.debug("export received bytes=%d", len(output.encode("utf-8")), extra=log_extra)
+                return output
 
-                last_error = error_output or f"exit_status={exit_status}"
-                logger.warning(
-                    "export command failed command=%s status=%s", command, exit_status, extra=log_extra
-                )
-
-            raise MikroTikCommandError(last_error or "unable to retrieve export")
+            error_message = error_output or f"exit_status={exit_status}"
+            logger.warning("export command failed command=%s status=%s", command, exit_status, extra=log_extra)
+            raise MikroTikCommandError(error_message)
         finally:
             client.close()
 
