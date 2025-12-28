@@ -28,11 +28,20 @@ from app.mikrotik.backup import fetch_export, log_mikrotik_diff, perform_system_
 
 def build_parser() -> argparse.ArgumentParser:
     """Create the argument parser for the CLI."""
+    mikrotik_system_backup_parent = argparse.ArgumentParser(add_help=False)
+    mikrotik_system_backup_parent.add_argument(
+        "--mikrotik-system-backup",
+        action="store_true",
+        default=None,
+        help="Enable MikroTik binary system backup via /system backup save",
+    )
+
     parser = argparse.ArgumentParser(
         description=(
             "Backup utility for Cisco and MikroTik device configurations. "
             "Use this CLI to run configuration backups and manage inventory files."
-        )
+        ),
+        parents=[mikrotik_system_backup_parent],
     )
 
     parser.add_argument(
@@ -62,18 +71,14 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands = parser.add_subparsers(dest="command", title="commands")
 
     backup_parser = subcommands.add_parser(
-        "backup", help="Run configuration backups for all configured devices"
+        "backup",
+        help="Run configuration backups for all configured devices",
+        parents=[mikrotik_system_backup_parent],
     )
     backup_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would be backed up without connecting to devices",
-    )
-    backup_parser.add_argument(
-        "--mikrotik-system-backup",
-        action="store_true",
-        default=None,
-        help="Enable MikroTik binary system backup via /system backup save",
     )
 
     return parser
