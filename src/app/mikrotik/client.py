@@ -146,8 +146,14 @@ class MikroTikClient:
 
         remote_filename = f"{backup_name}.backup"
         command = f"/system backup save name={backup_name} dont-encrypt=yes"
+        log_extra = {**log_extra, "filename": remote_filename}
 
-        logger.info("start system-backup device=%s", log_extra.get("device", "-"), extra=log_extra)
+        logger.info(
+            "start system-backup device=%s filename=%s",
+            log_extra.get("device", "-"),
+            remote_filename,
+            extra=log_extra,
+        )
         client = self._connect(logger, log_extra)
         sftp: paramiko.SFTPClient | None = None
         try:

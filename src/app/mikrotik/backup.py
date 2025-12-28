@@ -37,8 +37,15 @@ def perform_system_backup(
     client = MikroTikClient(
         host=device.host, username=device.username, password=password, port=device.port
     )
-    backup_name = f"{timestamp}_system"
-    destination = backup_dir / "mikrotik" / device.name / f"{backup_name}.backup"
+    device_name = getattr(device, "name", "")
+    if " " in device_name:
+        raise ValueError("Device name cannot contain spaces for system backup filename")
+
+    backup_name = f"{device_name}_{timestamp}"
+    backup_filename = f"{backup_name}.backup"
+    destination = backup_dir / "mikrotik" / device_name / backup_filename
+    log_extra = {**log_extra, "filename": backup_filename}
+    logger.info("creating system-backup device=%s filename=%s", device_name, backup_filename, extra=log_extra)
     return client.fetch_system_backup(backup_name, destination, logger, log_extra)
 
 
