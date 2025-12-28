@@ -58,26 +58,37 @@ class MikroTikClient:
     ) -> bool:
         """Remove backup file from MikroTik device without failing the backup process."""
 
-        command = f"/file remove {filename}"
+        find_command = f'/file find name="{filename}"'
+        logger.debug("executing mikrotik command='%s'", find_command, extra=log_extra)
+        try:
+            find_output, find_error_output, find_exit_status = self._run_command(ssh_client, find_command)
+        except MikroTikCommandError as exc:
+            logger.warning("failed to remove remote file filename=%s error=%s", filename, exc, extra=log_extra)
+            return False
+
+        if find_exit_status != 0:
+            error_message = find_error_output or f"exit_status={find_exit_status}"
+            logger.warning("failed to remove remote file filename=%s error=%s", filename, error_message, extra=log_extra)
+            return False
+
+        if not find_output.split():
+            logger.debug("remote file not found, nothing to remove filename=%s", filename, extra=log_extra)
+            return True
+
+        command = f'/file remove [find name="{filename}"]'
         logger.debug("executing mikrotik command='%s'", command, extra=log_extra)
         try:
             _, error_output, exit_status = self._run_command(ssh_client, command)
-        except MikroTikCommandError:
-            logger.warning("binary-backup remote file kept for manual recovery", extra=log_extra)
+        except MikroTikCommandError as exc:
+            logger.warning("failed to remove remote file filename=%s error=%s", filename, exc, extra=log_extra)
             return False
 
         if exit_status != 0:
-            logger.warning("binary-backup remote file kept for manual recovery", extra=log_extra)
-            logger.debug(
-                "remote cleanup failed file=%s status=%s error_output='%s'",
-                filename,
-                exit_status,
-                error_output,
-                extra=log_extra,
-            )
+            error_message = error_output or f"exit_status={exit_status}"
+            logger.warning("failed to remove remote file filename=%s error=%s", filename, error_message, extra=log_extra)
             return False
 
-        logger.info("binary-backup remote file removed file=%s", filename, extra=log_extra)
+        logger.info("remote file removed filename=%s", filename, extra=log_extra)
         return True
 
     def fetch_export(self, logger: logging.Logger, log_extra: dict[str, Any]) -> str:
