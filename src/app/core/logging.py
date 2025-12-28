@@ -27,31 +27,6 @@ FALLBACK_DIRECTORY = Path("./logs")
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | device=%(device)s | %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-RESERVED_LOG_RECORD_KEYS: set[str] = {
-    "args",
-    "asctime",
-    "created",
-    "exc_info",
-    "exc_text",
-    "filename",
-    "funcName",
-    "levelname",
-    "levelno",
-    "lineno",
-    "message",
-    "module",
-    "msecs",
-    "msg",
-    "name",
-    "pathname",
-    "process",
-    "processName",
-    "relativeCreated",
-    "stack_info",
-    "thread",
-    "threadName",
-    "taskName",
-}
 
 
 @dataclass(slots=True)
@@ -108,35 +83,6 @@ def _load_logging_section(config_path: Path) -> Mapping[str, Any]:
         return {}
 
     return logging_section
-
-
-def sanitize_log_extra(extra: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Remove or rename reserved LogRecord keys from ``extra`` mappings.
-
-    The logging module reserves a number of attribute names (``filename``,
-    ``module``, ``lineno`` and others) which cannot be present in the ``extra``
-    dictionary passed to logging calls. When any of these keys are detected they
-    are moved to ``extra_<key>`` to avoid ``KeyError`` failures during logging.
-    """
-
-    if not extra:
-        return {}
-
-    safe_extra = dict(extra)
-    conflicts = RESERVED_LOG_RECORD_KEYS.intersection(safe_extra)
-    if not conflicts:
-        return safe_extra
-
-    logger = logging.getLogger(__name__)
-    for key in conflicts:
-        value = safe_extra.pop(key)
-        new_key = f"extra_{key}"
-        while new_key in safe_extra:
-            new_key = f"extra_{new_key}"
-        safe_extra[new_key] = value
-        logger.debug("Reserved LogRecord key '%s' found in extra; renamed to '%s'.", key, new_key)
-
-    return safe_extra
 
 
 def _level_from_value(raw_level: Any) -> int:

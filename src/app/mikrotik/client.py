@@ -10,7 +10,6 @@ from typing import Any
 
 import paramiko
 
-from app.core.logging import sanitize_log_extra
 
 class MikroTikClientError(RuntimeError):
     """Base exception for MikroTik client errors."""
@@ -42,7 +41,6 @@ class MikroTikClient:
         Returns the file size when verification succeeds, otherwise 0.
         """
 
-        log_extra = sanitize_log_extra(log_extra)
         if not path.exists():
             logger.error("binary-backup verification failed reason=missing", extra=log_extra)
             return 0
@@ -59,10 +57,6 @@ class MikroTikClient:
         self, ssh_client: paramiko.SSHClient, filename: str, logger: logging.Logger, log_extra: dict[str, Any]
     ) -> bool:
         """Remove backup file from MikroTik device without failing the backup process."""
-
-        log_extra = sanitize_log_extra(log_extra)
-        filename = str(filename).strip().strip("\"")
-        logger.debug("remote filename repr=%r", filename, extra=log_extra)
 
         command = f'/file remove [find name="{filename}"]'
         logger.debug("executing mikrotik command='%s'", command, extra=log_extra)
@@ -84,7 +78,6 @@ class MikroTikClient:
     def fetch_export(self, logger: logging.Logger, log_extra: dict[str, Any]) -> str:
         """Retrieve the export configuration from the device."""
 
-        log_extra = sanitize_log_extra(log_extra)
         command = "/export"
         logger.debug(
             "connecting to device=%s host=%s port=%s",
@@ -112,7 +105,6 @@ class MikroTikClient:
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         try:
-            log_extra = sanitize_log_extra(log_extra)
             logger.debug("opening ssh session host=%s port=%s", self.host, self.port, extra=log_extra)
             ssh.connect(
                 self.host,
@@ -154,14 +146,8 @@ class MikroTikClient:
 
         remote_filename = f"{backup_name}.backup"
         command = f"/system backup save name={backup_name} dont-encrypt=yes"
-        log_extra = sanitize_log_extra({**log_extra, "backup_file": remote_filename})
 
-        logger.info(
-            "start system-backup device=%s backup_file=%s",
-            log_extra.get("device", "-"),
-            remote_filename,
-            extra=log_extra,
-        )
+        logger.info("start system-backup device=%s", log_extra.get("device", "-"), extra=log_extra)
         client = self._connect(logger, log_extra)
         sftp: paramiko.SFTPClient | None = None
         try:
