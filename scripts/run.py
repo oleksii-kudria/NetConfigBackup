@@ -22,7 +22,7 @@ from app.core.logging import setup_logging  # noqa: E402
 from app.core.models import Device  # noqa: E402
 from app.core.secrets import SecretNotFoundError, get_password  # noqa: E402
 from app.core.storage import load_local_config, resolve_backup_dir, save_backup_text  # noqa: E402
-from app.mikrotik.backup import fetch_export, log_mikrotik_diff  # noqa: E402
+from app.mikrotik.backup import fetch_export, log_mikrotik_diff, perform_system_backup  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -206,6 +206,12 @@ def _backup_mikrotik_device(device: Device, password: str, backup_dir: Path, log
 
     saved_path = save_backup_text(backup_dir, "mikrotik", device.name, filename, export_text, logger, metadata)
     log_mikrotik_diff(saved_path, logger, log_extra)
+
+    try:
+        perform_system_backup(device, password, timestamp, backup_dir, logger)
+    except Exception:
+        logger.exception("system-backup failed", extra=log_extra)
+
     return saved_path
 
 

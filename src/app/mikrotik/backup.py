@@ -28,6 +28,20 @@ def backup_device(client: MikroTikClient, output_path: Path) -> Path:
     return write_backup(output_path, content)
 
 
+def perform_system_backup(
+    device: Any, password: str, timestamp: str, backup_dir: Path, logger: logging.Logger
+) -> Path:
+    """Create and download a binary system backup for a MikroTik device."""
+
+    log_extra = {"device": getattr(device, "name", "-")}
+    client = MikroTikClient(
+        host=device.host, username=device.username, password=password, port=device.port
+    )
+    backup_name = f"{timestamp}_system"
+    destination = backup_dir / "mikrotik" / device.name / f"{backup_name}.backup"
+    return client.fetch_system_backup(backup_name, destination, logger, log_extra)
+
+
 def log_mikrotik_diff(current_export: Path, logger: logging.Logger, log_extra: dict[str, str]) -> None:
     """Log MikroTik diff status for the latest export and persist diff when needed."""
 

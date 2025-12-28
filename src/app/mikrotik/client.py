@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import socket
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import paramiko
@@ -91,3 +92,78 @@ class MikroTikClient:
         error_output = stderr.read().decode("utf-8", errors="replace")
         exit_status = stdout.channel.recv_exit_status()
         return output, error_output, exit_status
+
+    def fetch_system_backup(
+        self,
+        backup_name: str,
+        destination: Path,
+        logger: logging.Logger,
+        log_extra: dict[str, Any],
+    ) -> Path:
+        """Create and download a binary system backup."""
+
+        remote_filename = f"{backup_name}.backup"
+        command = f"/system backup save name={backup_name} dont-encrypt=yes"
+
+        logger.info("start system-backup device=%s", log_extra.get("device", "-"), extra=log_extra)
+        client = self._connect(logger, log_extra)
+        sftp: paramiko.SFTPClient | None = None
+        try:
+            logger.debug("executing mikrotik command='%s'", command, extra=log_extra)
+            _, error_output, exit_status = self._run_command(client, command)
+            if exit_status != 0:
+                error_message = error_output or f"exit_status={exit_status}"
+                logger.error(
+                    "system-backup command failed command=%s status=%s", command, exit_status, extra=log_extra
+                )
+                raise MikroTikCommandError(error_message)
+
+            logger.debug("system-backup created on device file=%s", remote_filename, extra=log_extra)
+
+            try:
+                sftp = client.open_sftp()
+            except paramiko.SSHException as exc:  # pragma: no cover - network dependent
+                raise MikroTikClientError("Unable to open SFTP session") from exc
+
+            try:
+                remote_stats = sftp.stat(remote_filename)
+            except FileNotFoundError as exc:
+                logger.error("system-backup missing file=%s", remote_filename, extra=log_extra)
+                raise MikroTikCommandError(f"Backup file not found: {remote_filename}") from exc
+            except OSError as exc:
+                logger.error(
+                    "system-backup access failed file=%s reason=\"%s\"",
+                    remote_filename,
+                    exc,
+                    extra=log_extra,
+                )
+                raise MikroTikClientError("Unable to access backup file") from exc
+
+            if remote_stats.st_size <= 0:
+                logger.error("system-backup empty file=%s size=%d", remote_filename, remote_stats.st_size, extra=log_extra)
+                raise MikroTikCommandError("Backup file is empty on device")
+
+            destination.parent.mkdir(parents=True, exist_ok=True)
+
+            try:
+                sftp.get(remote_filename, str(destination))
+            except (OSError, paramiko.SSHException) as exc:  # pragma: no cover - network dependent
+                logger.error(
+                    "system-backup download failed file=%s reason=\"%s\"",
+                    remote_filename,
+                    exc,
+                    extra=log_extra,
+                )
+                raise MikroTikClientError("Unable to download system backup") from exc
+
+            local_size = destination.stat().st_size
+            if local_size <= 0:
+                logger.error("system-backup saved empty path=%s size=%d", destination, local_size, extra=log_extra)
+                raise MikroTikClientError("Downloaded backup file is empty")
+
+            logger.info("system-backup saved path=%s size=%d", destination, local_size, extra=log_extra)
+            return destination
+        finally:
+            if sftp is not None:
+                sftp.close()
+            client.close()
