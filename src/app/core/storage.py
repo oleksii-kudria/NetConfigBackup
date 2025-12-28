@@ -60,20 +60,29 @@ def save_backup_text(
     return backup_path
 
 
-def load_local_config(config_path: str | Path | None = None) -> Mapping[str, Any] | None:
+def load_local_config(
+    config_path: str | Path | None = None, logger: logging.Logger | None = None
+) -> Mapping[str, Any] | None:
     """Load local.yml if it exists and return the mapping."""
 
     config_file = Path(config_path) if config_path else DEFAULT_LOCAL_CONFIG
     if not config_file.is_absolute():
         config_file = PROJECT_ROOT / config_file
 
+    if logger:
+        logger.debug("loading local config from %s", config_file)
+
     if not config_file.exists():
+        if logger:
+            logger.debug("local config not found at %s", config_file)
         return None
 
     try:
         with config_file.open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
-    except (OSError, yaml.YAMLError):
+    except (OSError, yaml.YAMLError) as exc:
+        if logger:
+            logger.warning("unable to read local config file=%s reason=\"%s\"", config_file, exc)
         return None
 
     return data if isinstance(data, Mapping) else None
