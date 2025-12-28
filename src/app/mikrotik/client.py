@@ -60,9 +60,28 @@ class MikroTikClient:
     ) -> bool:
         """Remove backup file from MikroTik device without failing the backup process."""
 
+<<<<<<< HEAD
         log_extra = sanitize_log_extra(log_extra)
         filename = str(filename).strip().strip("\"")
         logger.debug("remote filename repr=%r", filename, extra=log_extra)
+=======
+        find_command = f'/file find name="{filename}"'
+        logger.debug("executing mikrotik command='%s'", find_command, extra=log_extra)
+        try:
+            find_output, find_error_output, find_exit_status = self._run_command(ssh_client, find_command)
+        except MikroTikCommandError as exc:
+            logger.warning("failed to remove remote file filename=%s error=%s", filename, exc, extra=log_extra)
+            return False
+
+        if find_exit_status != 0:
+            error_message = find_error_output or f"exit_status={find_exit_status}"
+            logger.warning("failed to remove remote file filename=%s error=%s", filename, error_message, extra=log_extra)
+            return False
+
+        if not find_output.split():
+            logger.debug("remote file not found, nothing to remove filename=%s", filename, extra=log_extra)
+            return True
+>>>>>>> parent of 173a0da (Merge pull request #15 from oleksii-kudria/codex/remove-mikrotik-without-precheck)
 
         command = f'/file remove [find name="{filename}"]'
         logger.debug("executing mikrotik command='%s'", command, extra=log_extra)
@@ -72,13 +91,12 @@ class MikroTikClient:
             logger.warning("failed to remove remote file filename=%s error=%s", filename, exc, extra=log_extra)
             return False
 
-        logger.info("remote file cleanup requested filename=%s", filename, extra=log_extra)
-
         if exit_status != 0:
             error_message = error_output or f"exit_status={exit_status}"
             logger.warning("failed to remove remote file filename=%s error=%s", filename, error_message, extra=log_extra)
             return False
 
+        logger.info("remote file removed filename=%s", filename, extra=log_extra)
         return True
 
     def fetch_export(self, logger: logging.Logger, log_extra: dict[str, Any]) -> str:
