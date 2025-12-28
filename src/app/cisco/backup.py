@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from app.core.logging import sanitize_log_extra
 from app.cisco.client import CiscoClient
 from app.core.storage import write_backup
 
@@ -14,7 +15,7 @@ def backup_device(
 ) -> Path:
     """Perform a backup for a Cisco device and save it to disk."""
 
-    log_extra = log_extra or {}
+    log_extra = sanitize_log_extra(log_extra)
     if logger:
         logger.debug("executing command='show running-config'", extra=log_extra)
     content = client.fetch_running_config()
