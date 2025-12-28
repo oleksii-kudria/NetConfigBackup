@@ -61,6 +61,9 @@ class MikroTikClient:
         """Remove backup file from MikroTik device without failing the backup process."""
 
         log_extra = sanitize_log_extra(log_extra)
+        filename = str(filename).strip().strip("\"")
+        logger.debug("remote filename repr=%r", filename, extra=log_extra)
+
         command = f'/file remove [find name="{filename}"]'
         logger.debug("executing mikrotik command='%s'", command, extra=log_extra)
         try:
