@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     mikrotik_system_backup_parent.add_argument(
         "--mikrotik-system-backup",
         action="store_true",
-        default=None,
+        default=argparse.SUPPRESS,
         help="Enable MikroTik binary system backup via /system backup save",
     )
 
@@ -133,7 +133,9 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
     )
     backup_dir = resolve_backup_dir(args.backup_dir, local_config, logger)
-    system_backup_enabled = _resolve_mikrotik_system_backup(args.mikrotik_system_backup, local_config, logger)
+    system_backup_enabled = _resolve_mikrotik_system_backup(
+        getattr(args, "mikrotik_system_backup", None), local_config, logger
+    )
     logger.info("Starting backup for %d device(s).", len(devices))
 
     for device in devices:
