@@ -31,10 +31,11 @@ class Device:
 
     name: str
     vendor: DeviceVendor
-    model: str
+    model: str | None = None
     host: str
     username: str
     auth: DeviceAuth
     backup: DeviceBackup
     port: int = 22
     backup_path: Path | None = None
+    platform: str | None = None

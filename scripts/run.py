@@ -21,7 +21,7 @@ from app.cisco.client import CiscoClient  # noqa: E402
 from app.core.config import load_devices  # noqa: E402
 from app.core.logging import setup_logging  # noqa: E402
 from app.core.models import Device  # noqa: E402
-from app.core.secrets import SecretNotFoundError, get_password  # noqa: E402
+from app.core.secrets import Secrets, SecretNotFoundError, load_secrets, resolve_device_secrets  # noqa: E402
 from app.core.storage import load_local_config, resolve_backup_dir, save_backup_text  # noqa: E402
 from app.mikrotik.backup import fetch_export, log_mikrotik_diff, perform_system_backup  # noqa: E402
 
@@ -111,7 +111,7 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
     config_path = Path(args.config)
     logger.debug("loading devices from %s", config_path)
     try:
-        devices = load_devices(config_path)
+        devices = load_devices(config_path, logger)
     except Exception:
         logger.exception("Failed to load devices configuration.", extra={"device": "-"})
         return 1
@@ -129,6 +129,14 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
     if local_config is not None:
         logger.debug("local config loaded from %s", local_config_path)
 
+    secrets_path = Path(args.secrets)
+    logger.debug("loading secrets from %s", secrets_path)
+    try:
+        secrets = load_secrets(secrets_path, logger)
+    except Exception:
+        logger.exception("Failed to load secrets configuration.", extra={"device": "-"})
+        return 1
+
     logger.debug(
         "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
     )
@@ -139,13 +147,13 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
     logger.info("Starting backup for %d device(s).", len(devices))
 
     for device in devices:
-        _process_device_backup(device, backup_dir, logger, system_backup_enabled)
+        _process_device_backup(device, backup_dir, secrets, logger, system_backup_enabled)
 
     return 0
 
 
 def _process_device_backup(
-    device: Device, backup_dir: Path, logger: logging.Logger, system_backup_enabled: bool
+    device: Device, backup_dir: Path, secrets: Secrets, logger: logging.Logger, system_backup_enabled: bool
 ) -> None:
     """Handle backup for a single device with logging."""
 
@@ -161,14 +169,28 @@ def _process_device_backup(
     )
 
     try:
-        password = get_password(device.auth.secret_ref)
+        secret_entry = resolve_device_secrets(device.auth.secret_ref, secrets)
     except SecretNotFoundError:
-        logger.error("Skipping device due to missing secret.", extra=log_extra)
+        logger.error(
+            "device=%s missing secrets for secrets_ref=%s",
+            device.name,
+            device.auth.secret_ref,
+            extra=log_extra,
+        )
         return
+
+    logger.info(
+        "device=%s secrets_ref=%s secrets_loaded=true", device.name, device.auth.secret_ref, extra=log_extra
+    )
 
     try:
         if device.vendor == "cisco":
-            client = CiscoClient(host=device.host, username=device.username, password=password)
+            client = CiscoClient(
+                host=device.host,
+                username=device.username,
+                password=secret_entry.password,
+                enable_password=secret_entry.enable_password,
+            )
             output_path = _device_output_path(backup_dir, device, "running-config")
             backup_path = backup_cisco(client, output_path, logger, log_extra)
         else:
@@ -176,7 +198,7 @@ def _process_device_backup(
                 "start backup device=%s host=%s", device.name, device.host, extra=log_extra
             )
             backup_path = _backup_mikrotik_device(
-                device, password, backup_dir, logger, system_backup_enabled
+                device, secret_entry.password, backup_dir, logger, system_backup_enabled
             )
     except Exception:
         logger.exception("Backup failed for device.", extra=log_extra)
@@ -217,7 +239,7 @@ def _backup_mikrotik_device(
     metadata = {
         "device": device.name,
         "vendor": device.vendor,
-        "model": device.model,
+        "model": device.model or "-",
         "host": device.host,
         "backup_time": timestamp,
     }
