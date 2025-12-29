@@ -1,24 +1,21 @@
 # Example inventory without sensitive data
 # Copy to config/devices.yml and fill with real device details.
 # Secrets such as passwords live in config/secrets.yml and are referenced via
-# the secrets_ref field (Cisco) or auth.secret_ref (MikroTik).
+# the secret_ref field.
 
 devices:
   - name: hq-core-sw1
     vendor: cisco
+    model: ""
     ip: 192.0.2.10
-    ssh_port: 22
+    port: 22
     username: backup
-    platform: iosxe
-    secrets_ref: hq-core-sw1
+    secret_ref: hq-core-sw1
 
   - name: travel-mikrotik
     vendor: mikrotik
     model: hAP ax3
-    host: 198.51.100.5
+    ip: 198.51.100.5
     port: 22
     username: backup
-    auth:
-      secret_ref: travel-mikrotik
-    backup:
-      type: export
+    secret_ref: travel-mikrotik

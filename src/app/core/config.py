@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 import yaml
 
-from app.core.models import Device, DeviceAuth, DeviceBackup, DeviceVendor
+from app.core.models import Device, DeviceAuth, DeviceBackup, DeviceBackupType, DeviceVendor
 
 @dataclass(slots=True)
 class ConfigPaths:
@@ -58,88 +58,53 @@ def _validate_port(value: Any, context: str) -> int:
     return value
 
 
-def _validate_backup_type(vendor: DeviceVendor, backup_type: str, context: str) -> str:
-    if vendor == "cisco" and backup_type != "running-config":
-        raise DevicesConfigError(
-            f"{context}: Cisco devices must use backup type 'running-config'."
-        )
-    if vendor == "mikrotik" and backup_type != "export":
-        raise DevicesConfigError(
-            f"{context}: MikroTik devices must use backup type 'export'."
-        )
-    return backup_type
-
-
-def _validate_platform(value: Any, context: str) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise DevicesConfigError(f"{context}: platform must be a string when provided.")
-
-    allowed = {"ios", "iosxe", "nxos"}
-    if value not in allowed:
-        raise DevicesConfigError(f"{context}: invalid platform '{value}'. Allowed: ios, iosxe, nxos.")
-    return value
-
-
-def _parse_cisco_device(raw_device: Mapping[str, Any], context: str) -> Device:
-    name = _require_string(raw_device, "name", context)
-    ip = _require_string(raw_device, "ip", f"{context} '{name}'")
-    username = _require_string(raw_device, "username", f"{context} '{name}'")
-    secret_ref = _require_string(raw_device, "secrets_ref", f"{context} '{name}'")
-    port = _validate_port(raw_device.get("ssh_port"), f"{context} '{name}' ssh_port")
-    platform = _validate_platform(raw_device.get("platform"), f"{context} '{name}'")
-    model = raw_device.get("model")
-    if model is not None and not isinstance(model, str):
-        raise DevicesConfigError(f"{context} '{name}': model must be a string when provided.")
-
-    for forbidden in ("password", "enable_password"):
-        if forbidden in raw_device:
+def _validate_forbidden_keys(raw_device: Mapping[str, Any], context: str) -> None:
+    forbidden_keys = {
+        "host",
+        "ssh_port",
+        "secrets_ref",
+        "auth",
+        "backup",
+        "platform",
+        "password",
+        "enable_password",
+    }
+    for key in forbidden_keys:
+        if key in raw_device:
             raise DevicesConfigError(
-                f"{context} '{name}': field '{forbidden}' is not allowed in devices.yml. "
-                "Store secrets in config/secrets.yml."
+                f"{context}: field '{key}' is not allowed in devices.yml. "
+                "Use the unified schema and store secrets in config/secrets.yml."
             )
 
-    return Device(
-        name=name,
-        vendor="cisco",
-        model=model,
-        host=ip,
-        port=port,
-        username=username,
-        platform=platform,
-        auth=DeviceAuth(secret_ref=secret_ref),
-        backup=DeviceBackup(type="running-config"),
-    )
 
+def _parse_device(raw_device: Mapping[str, Any], context: str) -> Device:
+    _validate_forbidden_keys(raw_device, context)
 
-def _parse_mikrotik_device(raw_device: Mapping[str, Any], context: str) -> Device:
-    name = _require_string(raw_device, "name", context)
-    model = _require_string(raw_device, "model", context)
-    host = _require_string(raw_device, "host", f"{context} '{name}'")
-    username = _require_string(raw_device, "username", f"{context} '{name}'")
-    port = _validate_port(raw_device.get("port"), f"{context} '{name}'")
-
-    auth_raw = raw_device.get("auth")
-    if not isinstance(auth_raw, Mapping):
-        raise DevicesConfigError(f"{context} '{name}': auth must be a mapping.")
-    secret_ref = _require_string(auth_raw, "secret_ref", f"{context} '{name}' auth")
-    if "password" in raw_device or "password" in auth_raw:
+    allowed_keys = {"name", "vendor", "model", "ip", "port", "username", "secret_ref"}
+    unexpected_keys = set(raw_device) - allowed_keys
+    if unexpected_keys:
         raise DevicesConfigError(
-            f"{context} '{name}': password must not be stored in devices.yml. Use config/secrets.yml."
+            f"{context}: unexpected field(s) {sorted(unexpected_keys)}. "
+            "Allowed fields: name, vendor, model, ip, port, username, secret_ref."
         )
 
-    backup_raw = raw_device.get("backup")
-    if not isinstance(backup_raw, Mapping):
-        raise DevicesConfigError(f"{context} '{name}': backup must be a mapping.")
-    backup_type = _require_string(backup_raw, "type", f"{context} '{name}' backup")
-    backup_type = _validate_backup_type("mikrotik", backup_type, f"{context} '{name}'")
+    name = _require_string(raw_device, "name", context)
+    vendor = _validate_vendor(_require_string(raw_device, "vendor", context), context)
+    ip = _require_string(raw_device, "ip", f"{context} '{name}'")
+    username = _require_string(raw_device, "username", f"{context} '{name}'")
+    secret_ref = _require_string(raw_device, "secret_ref", f"{context} '{name}'")
+    port = _validate_port(raw_device.get("port"), f"{context} '{name}' port")
+    model_raw = raw_device.get("model")
+    if model_raw is not None and not isinstance(model_raw, str):
+        raise DevicesConfigError(f"{context} '{name}': model must be a string when provided.")
+
+    backup_type: DeviceBackupType = "running-config" if vendor == "cisco" else "export"
 
     return Device(
         name=name,
-        vendor="mikrotik",
-        model=model,
-        host=host,
+        vendor=vendor,
+        model=model_raw,
+        host=ip,
         port=port,
         username=username,
         auth=DeviceAuth(secret_ref=secret_ref),
@@ -179,11 +144,7 @@ def load_devices(path: Path, logger: logging.Logger | None = None) -> list[Devic
         provisional_name = raw_device.get("name") or "-"
         log_extra = {"device": provisional_name}
         try:
-            vendor_value = _validate_vendor(_require_string(raw_device, "vendor", context), context)
-            if vendor_value == "cisco":
-                device = _parse_cisco_device(raw_device, context)
-            else:
-                device = _parse_mikrotik_device(raw_device, context)
+            device = _parse_device(raw_device, context)
         except DevicesConfigError as exc:
             logger.error("%s", exc, extra=log_extra)
             continue
@@ -200,18 +161,18 @@ def load_devices(path: Path, logger: logging.Logger | None = None) -> list[Devic
         seen_names.add(device.name)
         devices.append(device)
 
-        if device.vendor == "cisco":
-            logger.info(
-                "device=%s vendor=cisco loaded from devices.yml", device.name, extra={"device": device.name}
-            )
-            logger.debug(
-                "device=%s ip=%s port=%s username=%s platform=%s",
-                device.name,
-                device.host,
-                device.port,
-                device.username,
-                device.platform or "-",
-                extra={"device": device.name},
-            )
+        logger.info(
+            "device=%s vendor=%s loaded from devices.yml", device.name, device.vendor, extra={"device": device.name}
+        )
+        logger.debug(
+            "device=%s ip=%s port=%s username=%s secret_ref=%s model=%s",
+            device.name,
+            device.host,
+            device.port,
+            device.username,
+            device.auth.secret_ref,
+            device.model if device.model is not None and device.model != "" else "-",
+            extra={"device": device.name},
+        )
 
     return devices

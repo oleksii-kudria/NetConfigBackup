@@ -172,16 +172,14 @@ def _process_device_backup(
         secret_entry = resolve_device_secrets(device.auth.secret_ref, secrets)
     except SecretNotFoundError:
         logger.error(
-            "device=%s missing secrets for secrets_ref=%s",
+            "device=%s missing secrets for secret_ref=%s",
             device.name,
             device.auth.secret_ref,
             extra=log_extra,
         )
         return
 
-    logger.info(
-        "device=%s secrets_ref=%s secrets_loaded=true", device.name, device.auth.secret_ref, extra=log_extra
-    )
+    logger.info("device=%s secret_ref=%s secrets_loaded=true", device.name, device.auth.secret_ref, extra=log_extra)
 
     try:
         if device.vendor == "cisco":

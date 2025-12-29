@@ -5,7 +5,7 @@ NetConfigBackup — це CLI-інструмент для резервного к
 
 ## Реалізований функціонал (UA)
 - **Запуск та режими:** CLI `scripts/run.py` з підкомандою `backup`; підтримка `--debug`, що перевизначає рівень логування з `config/local.yml`; опційний прапорець `--mikrotik-system-backup` для створення бінарного бекапу.
-- **Інвентаризація:** читання пристроїв із `config/devices.yml` (логічний поділ за `vendor`, `host`, `port`, `username`, `auth.secret_ref`, `backup.type` тощо); секрети беруться з `config/secrets.yml`.
+- **Інвентаризація:** читання пристроїв із `config/devices.yml` з єдиною схемою (`name`, `vendor`, `model`, `ip`, `port`, `username`, `secret_ref`); секрети беруться з `config/secrets.yml`.
 - **Локальна конфігурація:** опційний `config/local.yml` (не зберігається в git) для налаштування каталогу резервних копій та логів, а також перемикача `mikrotik.system_backup`; відсутність або помилки читання не блокують роботу.
 - **Логування:** кореневий логер з очищенням секретів, примусовим контекстом `device` та конфігурацією рівня через CLI або `local.yml`; запис у файл і stdout з автоматичним fallback каталогу логів.
 - **Визначення BACKUP_DIR:** пріоритет `--backup-dir` CLI → `config/local.yml` → запасний `./backup/`; каталог перевіряється на можливість запису з попереджувальними повідомленнями про відмову.
@@ -38,27 +38,39 @@ ssh,ftp,read,write,policy,test,sensitive,\
 - `read`, `write`, `policy`, `test`, `sensitive` забезпечують доступ до конфігураційних команд без права керування сервісами або локальними користувачами.
 - Відмова від `full` знижує ризик несанкціонованих змін та обмежує поверхню атаки.
 
-## Cisco: схема devices.yml та secrets.yml (UA)
-- **devices.yml** (тільки не-чутливі дані)
+## Схема devices.yml та secrets.yml (UA)
+- **devices.yml** (тільки не-чутливі дані, однакові поля для Cisco та MikroTik)
   ```yml
   devices:
-    - vendor: cisco
-      name: core-sw-01
+    - name: core-sw-01
+      vendor: cisco
+      model: ""
       ip: 10.0.0.1
-      ssh_port: 22        # необовʼязково, за замовчуванням 22
+      port: 22          # необовʼязково, за замовчуванням 22
       username: backup
-      platform: iosxe     # опційно: ios | iosxe | nxos
-      secrets_ref: core-sw-01
+      secret_ref: core-sw-01
+
+    - name: travel-mikrotik
+      vendor: mikrotik
+      model: hAP ax3    # інформативне поле; можна опустити або залишити ""
+      ip: 198.51.100.5
+      port: 22
+      username: backup
+      secret_ref: travel-mikrotik
   ```
+- `model` — інформаційне поле; допускається порожній рядок або відсутність.
+- `/export` для MikroTik виконується за замовчуванням; system backup вмикається окремо (CLI прапорець `--mikrotik-system-backup` або `mikrotik.system_backup` у `config/local.yml`).
 - **secrets.yml** (зберігати локально, не комітити)
   ```yml
   secrets:
     core-sw-01:
       password: "CHANGE_ME"              # обовʼязково
       enable_password: "CHANGE_ME_ENABLE"  # опційно
+    travel-mikrotik:
+      password: "CHANGE_ME"
   ```
 - `config/secrets.yml` виключений з git (див. `.gitignore`), натомість використовуйте `config/secrets.yml.example` як шаблон.
-- `secrets_ref` обовʼязковий; відсутність файлу або ключа веде до пропуску пристрою з помилкою у логах.
+- `secret_ref` обовʼязковий для кожного пристрою; відсутність файлу або ключа веде до пропуску пристрою з помилкою у логах.
 - Паролі або інші секрети **заборонено** додавати в `devices.yml`; валідатор це перевіряє.
 
 ---
@@ -68,7 +80,7 @@ NetConfigBackup is a CLI tool for backing up Cisco and MikroTik configurations. 
 
 ## Implemented features (EN)
 - **Execution and modes:** CLI `scripts/run.py` with the `backup` subcommand; `--debug` overrides the logging level configured in `config/local.yml`; optional `--mikrotik-system-backup` flag enables binary backups.
-- **Inventory:** reads devices from `config/devices.yml` (fields such as `vendor`, `host`, `port`, `username`, `auth.secret_ref`, `backup.type`); secrets are sourced from `config/secrets.yml`.
+- **Inventory:** reads devices from `config/devices.yml` using a unified schema (`name`, `vendor`, `model`, `ip`, `port`, `username`, `secret_ref`); secrets are sourced from `config/secrets.yml`.
 - **Local configuration:** optional `config/local.yml` (kept out of git) to tune backup and logging directories and the `mikrotik.system_backup` switch; missing or unreadable files do not stop execution.
 - **Logging:** root logger scrubs secrets, enforces a `device` context, and respects CLI or `local.yml` levels; writes to file and stdout with automatic fallback for the log directory.
 - **BACKUP_DIR resolution:** priority `--backup-dir` CLI → `config/local.yml` → fallback `./backup/`; each candidate is probed for writability with warnings when falling back.
@@ -101,25 +113,37 @@ ssh,ftp,read,write,policy,test,sensitive,\
 - `read`, `write`, `policy`, `test`, and `sensitive` enable configuration export while blocking service management and local user administration.
 - Avoiding `full` reduces the blast radius of the account and limits the attack surface.
 
-## Cisco: devices.yml and secrets.yml schema (EN)
-- **devices.yml** (non-sensitive data only)
+## devices.yml and secrets.yml schema (EN)
+- **devices.yml** (non-sensitive data only, shared fields for Cisco and MikroTik)
   ```yml
   devices:
-    - vendor: cisco
-      name: core-sw-01
+    - name: core-sw-01
+      vendor: cisco
+      model: ""
       ip: 10.0.0.1
-      ssh_port: 22        # optional, defaults to 22
+      port: 22          # optional, defaults to 22
       username: backup
-      platform: iosxe     # optional: ios | iosxe | nxos
-      secrets_ref: core-sw-01
+      secret_ref: core-sw-01
+
+    - name: travel-mikrotik
+      vendor: mikrotik
+      model: hAP ax3    # informational; can be omitted or set to ""
+      ip: 198.51.100.5
+      port: 22
+      username: backup
+      secret_ref: travel-mikrotik
   ```
+- `model` is informational only; it may be left empty or omitted.
+- MikroTik uses `/export` by default; the binary system backup is enabled separately (CLI flag `--mikrotik-system-backup` or `mikrotik.system_backup` in `config/local.yml`).
 - **secrets.yml** (keep locally, do not commit)
   ```yml
   secrets:
     core-sw-01:
       password: "CHANGE_ME"              # required
       enable_password: "CHANGE_ME_ENABLE"  # optional
+    travel-mikrotik:
+      password: "CHANGE_ME"
   ```
 - `config/secrets.yml` is ignored by git (see `.gitignore`). Use `config/secrets.yml.example` as a template without real secrets.
-- `secrets_ref` is mandatory; when the file or key is missing the device is skipped and an error is logged.
+- `secret_ref` is mandatory for each device; when the file or key is missing the device is skipped and an error is logged.
 - Passwords or other secrets **must not** appear in `devices.yml`; validation enforces this.
