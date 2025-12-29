@@ -35,15 +35,25 @@ class SecretNotFoundError(KeyError):
 
 
 @dataclass(slots=True)
+class SecretEntry:
+    """Credentials required to connect to a device."""
+
+    password: str
+    enable_password: str | None = None
+
+
+@dataclass(slots=True)
 class Secrets:
-    """Container for device passwords."""
+    """Container for device secrets."""
 
-    passwords: Mapping[str, str]
+    entries: Mapping[str, SecretEntry]
+    source_path: Path
+    missing_source: bool = False
 
-    def get(self, secret_ref: str) -> str | None:
-        """Return the password for ``secret_ref`` if present."""
+    def get(self, secret_ref: str) -> SecretEntry | None:
+        """Return the full secret entry if present."""
 
-        return self.passwords.get(secret_ref)
+        return self.entries.get(secret_ref)
 
 
 def _normalize_secret_ref(secret_ref: str) -> str:
@@ -59,9 +69,6 @@ def _load_file_secrets(path: Path) -> Secrets:
     The expected structure matches ``config/secrets.yml.example``.
     """
 
-    if not path.exists():
-        return Secrets(passwords={})
-
     try:
         with path.open("r", encoding="utf-8") as handle:
             raw_data = yaml.safe_load(handle) or {}
@@ -71,11 +78,13 @@ def _load_file_secrets(path: Path) -> Secrets:
     if not isinstance(raw_data, Mapping):
         raise SecretsConfigError("Top-level secrets.yml structure must be a mapping.")
 
-    raw_secrets = raw_data.get("secrets") or {}
+    raw_secrets = raw_data.get("secrets")
+    if raw_secrets is None:
+        raise SecretsConfigError("Field 'secrets' is required in secrets.yml.")
     if not isinstance(raw_secrets, Mapping):
         raise SecretsConfigError("Field 'secrets' must be a mapping of secret refs.")
 
-    passwords: dict[str, str] = {}
+    entries: dict[str, SecretEntry] = {}
     for ref, entry in raw_secrets.items():
         if not isinstance(entry, Mapping):
             raise SecretsConfigError(f"Secret '{ref}' must be a mapping.")
@@ -86,12 +95,15 @@ def _load_file_secrets(path: Path) -> Secrets:
         if not isinstance(password, str):
             raise SecretsConfigError(f"Secret '{ref}' field 'password' must be a string.")
 
-        passwords[str(ref)] = password
+        enable_password = entry.get("enable_password")
+        if enable_password is not None and not isinstance(enable_password, str):
+            raise SecretsConfigError(
+                f"Secret '{ref}' field 'enable_password' must be a string when provided."
+            )
 
-    return Secrets(passwords=passwords)
+        entries[str(ref)] = SecretEntry(password=password, enable_password=enable_password)
 
-
-FILE_SECRETS = _load_file_secrets(DEFAULT_SECRETS_PATH)
+    return Secrets(entries=entries, source_path=path)
 
 
 def _env_password(secret_ref: str) -> str | None:
@@ -104,25 +116,43 @@ def _env_password(secret_ref: str) -> str | None:
     return None
 
 
-def get_password(secret_ref: str) -> str:
-    """Resolve the password for a device's secret reference.
+def load_secrets(path: Path = DEFAULT_SECRETS_PATH, logger: logging.Logger | None = None) -> Secrets:
+    """Load secrets from the provided path."""
+
+    logger = logger or logging.getLogger(__name__)
+    if not path.exists():
+        logger.error("Secrets file not found at %s", path, extra={"device": "-"})
+        return Secrets(entries={}, source_path=path, missing_source=True)
+
+    secrets = _load_file_secrets(path)
+    logger.debug("Secrets file loaded path=%s entries=%d", path, len(secrets.entries))
+    return secrets
+
+
+def resolve_device_secrets(secret_ref: str, secrets: Secrets | None = None) -> SecretEntry:
+    """Resolve credentials for a device's secret reference.
 
     Resolution order:
-    1. Environment variable ``NETCONFIGBACKUP_SECRET_<SECRET_REF>``
+    1. Environment variable ``NETCONFIGBACKUP_SECRET_<SECRET_REF>`` (password only)
     2. ``config/secrets.yml`` (if present)
-
-    If the password cannot be found, the function logs an error (without the
-    secret value) and raises :class:`SecretNotFoundError` to halt processing for
-    the current device.
     """
+
+    secrets = secrets or load_secrets()
 
     env_value = _env_password(secret_ref)
     if env_value is not None:
-        return env_value
+        entry = secrets.get(secret_ref)
+        return SecretEntry(password=env_value, enable_password=entry.enable_password if entry else None)
 
-    password = FILE_SECRETS.get(secret_ref)
-    if password is not None:
-        return password
+    entry = secrets.get(secret_ref)
+    if entry is not None:
+        return entry
 
-    logger.error("Missing secret for reference '%s'.", secret_ref)
     raise SecretNotFoundError(f"Secret '{secret_ref}' not found.")
+
+
+def get_password(secret_ref: str, secrets: Secrets | None = None) -> str:
+    """Compatibility wrapper returning only the password value."""
+
+    entry = resolve_device_secrets(secret_ref, secrets)
+    return entry.password

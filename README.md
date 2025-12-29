@@ -38,6 +38,29 @@ ssh,ftp,read,write,policy,test,sensitive,\
 - `read`, `write`, `policy`, `test`, `sensitive` забезпечують доступ до конфігураційних команд без права керування сервісами або локальними користувачами.
 - Відмова від `full` знижує ризик несанкціонованих змін та обмежує поверхню атаки.
 
+## Cisco: схема devices.yml та secrets.yml (UA)
+- **devices.yml** (тільки не-чутливі дані)
+  ```yml
+  devices:
+    - vendor: cisco
+      name: core-sw-01
+      ip: 10.0.0.1
+      ssh_port: 22        # необовʼязково, за замовчуванням 22
+      username: backup
+      platform: iosxe     # опційно: ios | iosxe | nxos
+      secrets_ref: core-sw-01
+  ```
+- **secrets.yml** (зберігати локально, не комітити)
+  ```yml
+  secrets:
+    core-sw-01:
+      password: "CHANGE_ME"              # обовʼязково
+      enable_password: "CHANGE_ME_ENABLE"  # опційно
+  ```
+- `config/secrets.yml` виключений з git (див. `.gitignore`), натомість використовуйте `config/secrets.yml.example` як шаблон.
+- `secrets_ref` обовʼязковий; відсутність файлу або ключа веде до пропуску пристрою з помилкою у логах.
+- Паролі або інші секрети **заборонено** додавати в `devices.yml`; валідатор це перевіряє.
+
 ---
 
 ## Project overview (EN)
@@ -77,3 +100,26 @@ ssh,ftp,read,write,policy,test,sensitive,\
 - `ssh` and `ftp` are required to run `/export` and retrieve the system backup via SFTP.
 - `read`, `write`, `policy`, `test`, and `sensitive` enable configuration export while blocking service management and local user administration.
 - Avoiding `full` reduces the blast radius of the account and limits the attack surface.
+
+## Cisco: devices.yml and secrets.yml schema (EN)
+- **devices.yml** (non-sensitive data only)
+  ```yml
+  devices:
+    - vendor: cisco
+      name: core-sw-01
+      ip: 10.0.0.1
+      ssh_port: 22        # optional, defaults to 22
+      username: backup
+      platform: iosxe     # optional: ios | iosxe | nxos
+      secrets_ref: core-sw-01
+  ```
+- **secrets.yml** (keep locally, do not commit)
+  ```yml
+  secrets:
+    core-sw-01:
+      password: "CHANGE_ME"              # required
+      enable_password: "CHANGE_ME_ENABLE"  # optional
+  ```
+- `config/secrets.yml` is ignored by git (see `.gitignore`). Use `config/secrets.yml.example` as a template without real secrets.
+- `secrets_ref` is mandatory; when the file or key is missing the device is skipped and an error is logged.
+- Passwords or other secrets **must not** appear in `devices.yml`; validation enforces this.
