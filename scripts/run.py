@@ -83,6 +83,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run only Cisco show running-config text backup",
     )
 
+    dry_run_parent = argparse.ArgumentParser(add_help=False)
+    dry_run_parent.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate connectivity and authentication without saving backups",
+    )
+
     examples = """
 Examples:
   scripts/run.py backup
@@ -121,7 +128,7 @@ Examples:
             "Backup utility for Cisco and MikroTik device configurations. "
             "Use this CLI to run configuration backups and manage inventory files."
         ),
-        parents=[feature_flags_parent],
+        parents=[feature_flags_parent, dry_run_parent],
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=examples,
     )
@@ -155,13 +162,8 @@ Examples:
     backup_parser = subcommands.add_parser(
         "backup",
         help="Run configuration backups for all configured devices",
-        parents=[feature_flags_parent],
+        parents=[feature_flags_parent, dry_run_parent],
         formatter_class=argparse.RawTextHelpFormatter,
-    )
-    backup_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate connectivity and authentication without saving backups",
     )
 
     return parser
