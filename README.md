@@ -15,6 +15,7 @@ NetConfigBackup — це CLI-інструмент для резервного к
 - **MikroTik:** зняття конфігурації через `/export`, збереження у структуровані каталоги `backup/mikrotik/<device>/`; визначення змін через нормалізований diff та контроль SHA256 із формуванням `<timestamp>_export.diff` при відмінностях; опційне створення бінарного backup через `/system backup save` та завантаження його через SFTP (прапорець `--mikrotik-system-backup` або `mikrotik.system_backup: true` у `local.yml`). Бінарний system-backup створюється на маршрутизаторі зі стабільним імʼям `<device>.backup`, що перезаписує попередню копію; локально файл зберігається з доданим timestamp `<device>_<YYYY-MM-DD_HHMMSS>.backup` для ведення історії. Remote cleanup вимкнено.
 - **Розділення копій:** текстовий backup (audit та diff) відокремлений від бінарного backup для disaster recovery.
 - **Feature flags:** CLI-прапорці `--mikrotik-export`, `--mikrotik-system-backup`, `--cisco-running-config` дозволяють запускати окремі кроки для відповідних вендорів.
+- **Exit codes:** уніфікована політика для інтеграцій: `0` (успіх), `1` (частковий провал), `2` (критичний провал).
 
 ### Увімкнення MikroTik system-backup (UA)
 - CLI: додайте прапорець `--mikrotik-system-backup` до `scripts/run.py backup ...`
@@ -94,6 +95,16 @@ CLI має пріоритет над `local.yml`. За замовчування�
   ```
 - JSON не містить секретів і підходить для інтеграцій (cron/CI, Telegram/Slack алерти).
 
+### Exit codes (UA)
+- `0` — успіх: у звичайному режимі створено хоча б один файл бекапу для вибраних задач; у dry-run принаймні один пристрій успішно пройшов SSH-логін.
+- `1` — частковий успіх: є хоча б один успішний пристрій/бекап, але деякі впали.
+- `2` — критичний провал: не створено жодного бекапу, усі dry-run перевірки невдалі або неможливо прочитати `devices.yml`/`secrets.yml`.
+
+Приклади:
+- Усі пристрої відпрацювали успішно → `0`.
+- З трьох пристроїв один не зайшов по SSH, але два знято → `1`.
+- `config/secrets.yml` пошкоджений або всі пристрої падають → `2`.
+
 ## MikroTik: користувач і права доступу (UA)
 Для збору конфігурацій та системних бекапів потрібен окремий обліковий запис з мінімальними правами. Уникайте використання групи `full` та будь-яких зайвих сервісів (winbox, api, web тощо).
 
@@ -171,6 +182,7 @@ NetConfigBackup is a CLI tool for backing up Cisco and MikroTik configurations. 
 - **MikroTik:** captures configuration via `/export`, saves under `backup/mikrotik/<device>/`, detects changes using normalized diffs plus SHA256 hashes, saves `<timestamp>_export.diff` files when changes occur, and optionally creates binary backups via `/system backup save` with SFTP download (enabled via `--mikrotik-system-backup` or `mikrotik.system_backup: true`). The system-backup is created on the router with a stable `<device>.backup` filename that overwrites the previous copy, while the local copy is renamed with a timestamp `<device>_<YYYY-MM-DD_HHMMSS>.backup` to keep history. Remote cleanup is disabled.
 - **Backup separation:** text backups for audit/diff are kept separate from binary backups for disaster recovery.
 - **Feature flags:** CLI flags `--mikrotik-export`, `--mikrotik-system-backup`, and `--cisco-running-config` allow running only the selected steps for matching vendors.
+- **Exit codes:** unified policy for automations: `0` (success), `1` (partial failure), `2` (critical failure).
 
 ### Enabling MikroTik system-backup (EN)
 - CLI: add the `--mikrotik-system-backup` flag when running `scripts/run.py backup ...`
@@ -249,6 +261,16 @@ The CLI flag overrides `local.yml`. By default the feature is disabled and the b
   }
   ```
 - No secrets are written to the JSON, making it suitable for cron/CI integrations or outbound alerts (Telegram/Slack, etc.).
+
+### Exit codes (EN)
+- `0` — success: in regular runs at least one backup file is created for the selected tasks; in dry-run at least one device completes SSH login.
+- `1` — partial failure: there is at least one success but some devices/tasks failed.
+- `2` — critical failure: no backups were produced, all dry-run checks failed, or `devices.yml`/`secrets.yml` cannot be read.
+
+Examples:
+- All devices finish successfully → `0`.
+- One out of three devices fails SSH but two are backed up → `1`.
+- `config/secrets.yml` is broken or every device fails → `2`.
 
 ## MikroTik: user and permissions (EN)
 Use a dedicated account with minimal privileges for collecting exports and system backups. Avoid the `full` group and disable unnecessary services (winbox, api, web, etc.).
