@@ -12,6 +12,7 @@ NetConfigBackup — це CLI-інструмент для резервного к
 - **Cisco:** конфігурація знімається з **running-config** командою `show running-config` (startup-config не використовується); перед виконанням вимикається paging через `terminal length 0`, щоб уникнути `--More--`; при обмежених правах можливі WARN про невдале вимкнення paging, але бекап продовжується. Результат зберігається до `<BACKUP_DIR>/cisco/<device>/<YYYY-MM-DD_HHMMSS>_running-config.txt`.
 - **MikroTik:** зняття конфігурації через `/export`, збереження у структуровані каталоги `backup/mikrotik/<device>/`; визначення змін через нормалізований diff та контроль SHA256; збереження diff-файлу при відмінностях; опційне створення бінарного backup через `/system backup save` та завантаження його через SFTP (прапорець `--mikrotik-system-backup` або `mikrotik.system_backup: true` у `local.yml`). Бінарний system-backup створюється на маршрутизаторі зі стабільним імʼям `<device>.backup`, що перезаписує попередню копію; локально файл зберігається з доданим timestamp `<device>_<YYYY-MM-DD_HHMMSS>.backup` для ведення історії. Remote cleanup вимкнено.
 - **Розділення копій:** текстовий backup (audit та diff) відокремлений від бінарного backup для disaster recovery.
+- **Feature flags:** CLI-прапорці `--mikrotik-export`, `--mikrotik-system-backup`, `--cisco-running-config` дозволяють запускати окремі кроки для відповідних вендорів.
 
 ### Увімкнення MikroTik system-backup (UA)
 - CLI: додайте прапорець `--mikrotik-system-backup` до `scripts/run.py backup ...`
@@ -21,6 +22,16 @@ NetConfigBackup — це CLI-інструмент для резервного к
     system_backup: true
   ```
 CLI має пріоритет над `local.yml`. За замовчуванням опція вимкнена, файл бекапу на пристрої не видаляється.
+
+### Запуск окремих кроків (UA)
+- Прапорці: `--mikrotik-export`, `--mikrotik-system-backup`, `--cisco-running-config`.
+- Без прапорців: виконується стандартний пайплайн (MikroTik `/export` і Cisco `show running-config`), `system_backup` залежить від CLI або `local.yml`.
+- Якщо вказано хоча б один прапорець, запускаються **лише** вибрані підзадачі для свого вендора:
+  - `scripts/run.py --mikrotik-system-backup backup` → тільки MikroTik system-backup
+  - `scripts/run.py --mikrotik-export backup` → тільки MikroTik `/export`
+  - `scripts/run.py --mikrotik-system-backup --mikrotik-export backup` → MikroTik system-backup + `/export`
+  - `scripts/run.py --mikrotik-system-backup --mikrotik-export --cisco-running-config backup` → MikroTik system-backup + `/export` + Cisco running-config
+- MikroTik прапорці застосовуються лише до `vendor: mikrotik`; Cisco прапорець — лише до `vendor: cisco`.
 
 ## MikroTik: користувач і права доступу (UA)
 Для збору конфігурацій та системних бекапів потрібен окремий обліковий запис з мінімальними правами. Уникайте використання групи `full` та будь-яких зайвих сервісів (winbox, api, web тощо).
@@ -96,6 +107,7 @@ NetConfigBackup is a CLI tool for backing up Cisco and MikroTik configurations. 
 - **Cisco:** configuration is taken from **running-config** via `show running-config` (startup-config is not used); paging is disabled first with `terminal length 0` to prevent `--More--`; if the command is rejected due to permissions, a warning is logged and the backup proceeds. Files are written to `<BACKUP_DIR>/cisco/<device>/<YYYY-MM-DD_HHMMSS>_running-config.txt`.
 - **MikroTik:** captures configuration via `/export`, saves under `backup/mikrotik/<device>/`, detects changes using normalized diffs plus SHA256 hashes, saves diff files when changes occur, and optionally creates binary backups via `/system backup save` with SFTP download (enabled via `--mikrotik-system-backup` or `mikrotik.system_backup: true`). The system-backup is created on the router with a stable `<device>.backup` filename that overwrites the previous copy, while the local copy is renamed with a timestamp `<device>_<YYYY-MM-DD_HHMMSS>.backup` to keep history. Remote cleanup is disabled.
 - **Backup separation:** text backups for audit/diff are kept separate from binary backups for disaster recovery.
+- **Feature flags:** CLI flags `--mikrotik-export`, `--mikrotik-system-backup`, and `--cisco-running-config` allow running only the selected steps for matching vendors.
 
 ### Enabling MikroTik system-backup (EN)
 - CLI: add the `--mikrotik-system-backup` flag when running `scripts/run.py backup ...`
@@ -105,6 +117,16 @@ NetConfigBackup is a CLI tool for backing up Cisco and MikroTik configurations. 
     system_backup: true
   ```
 The CLI flag overrides `local.yml`. By default the feature is disabled and the backup file stays on the device (no remote cleanup).
+
+### Running selective steps (EN)
+- Flags: `--mikrotik-export`, `--mikrotik-system-backup`, `--cisco-running-config`.
+- With no flags: the default pipeline runs (MikroTik `/export` and Cisco `show running-config`), and `system_backup` follows CLI/local configuration.
+- With at least one flag: **only** the selected sub-tasks run for the corresponding vendor:
+  - `scripts/run.py --mikrotik-system-backup backup` → MikroTik system-backup only
+  - `scripts/run.py --mikrotik-export backup` → MikroTik `/export` only
+  - `scripts/run.py --mikrotik-system-backup --mikrotik-export backup` → MikroTik system-backup + `/export`
+  - `scripts/run.py --mikrotik-system-backup --mikrotik-export --cisco-running-config backup` → MikroTik system-backup + `/export` + Cisco running-config
+- MikroTik flags apply only to `vendor: mikrotik`; the Cisco flag applies only to `vendor: cisco`.
 
 ## MikroTik: user and permissions (EN)
 Use a dedicated account with minimal privileges for collecting exports and system backups. Avoid the `full` group and disable unnecessary services (winbox, api, web, etc.).
