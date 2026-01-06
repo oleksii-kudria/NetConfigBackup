@@ -304,8 +304,32 @@ class CiscoClient:
     ) -> None:
         """Disable paging to capture full command output."""
 
-        logger.debug("device=%s sending terminal length 0", self.name, extra=log_extra)
-        session.run_command("terminal length 0")
+        logger.info("device=%s disabling paging", self.name, extra=log_extra)
+        try:
+            output = session.run_command("terminal length 0")
+        except Exception:
+            logger.warning("device=%s paging disable failed; continuing", self.name, extra=log_extra)
+            return
+
+        if _command_failed(output) or _extract_prompt(output) is None:
+            logger.warning("device=%s paging disable failed; continuing", self.name, extra=log_extra)
+            return
+
+        logger.info("device=%s paging disabled", self.name, extra=log_extra)
+
+
+_ERROR_PATTERNS = (
+    "invalid input",
+    "incomplete command",
+    "authorization failed",
+)
+
+
+def _command_failed(output: str) -> bool:
+    """Return True when the output contains known error markers."""
+
+    lowered = output.lower()
+    return any(pattern in lowered for pattern in _ERROR_PATTERNS)
 
 
 def _extract_command_output(raw_output: str, command: str) -> str:
