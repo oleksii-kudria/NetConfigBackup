@@ -87,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     dry_run_parent.add_argument(
         "--dry-run",
         action="store_true",
+        default=argparse.SUPPRESS,
         help="Validate connectivity and authentication without saving backups",
     )
 
@@ -203,7 +204,8 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
 
     logger.debug("total devices loaded=%d", len(devices))
     run_id = _timestamp()
-    summary = RunSummaryBuilder(run_id=run_id, timestamp=_iso_timestamp(), dry_run=bool(args.dry_run))
+    dry_run = bool(getattr(args, "dry_run", False))
+    summary = RunSummaryBuilder(run_id=run_id, timestamp=_iso_timestamp(), dry_run=dry_run)
     summary.set_devices_total(len(devices))
     for vendor, count in sorted(Counter(device.vendor for device in devices).items()):
         logger.debug("%s devices selected=%d", vendor, count)
@@ -236,7 +238,7 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         logger.exception("Failed to load secrets configuration.", extra={"device": "-"})
         return 2
 
-    if args.dry_run:
+    if dry_run:
         logger.info("dry_run=true")
         logger.debug("dry_run active: backup functions not invoked")
         logger.info("dry_run skipping diff")
