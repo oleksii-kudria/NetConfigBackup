@@ -123,15 +123,18 @@ class MikroTikClient:
         destination: Path,
         logger: logging.Logger,
         log_extra: dict[str, Any],
-    ) -> Path:
-        """Create and download a binary system backup."""
+    ) -> int:
+        """Create and download a binary system backup.
+
+        Returns the downloaded file size after verification.
+        """
 
         remote_filename = f"{backup_name}.backup"
         command = f"/system backup save name={backup_name} dont-encrypt=yes"
-        log_extra = sanitize_log_extra({**log_extra, "backup_file": remote_filename})
+        log_extra = sanitize_log_extra({**log_extra, "remote_file": remote_filename})
 
         logger.info(
-            "start system-backup device=%s backup_file=%s",
+            "start system-backup device=%s remote_file=%s",
             log_extra.get("device", "-"),
             remote_filename,
             extra=log_extra,
@@ -186,18 +189,11 @@ class MikroTikClient:
                 )
                 raise MikroTikClientError("Unable to download system backup") from exc
 
-            logger.info("binary-backup downloaded path=%s", destination, extra=log_extra)
-
             local_size = self.verify_binary_backup(destination, logger, log_extra)
             if local_size <= 0:
-                logger.warning("binary-backup remote file kept for manual recovery", extra=log_extra)
                 raise MikroTikClientError("Downloaded backup file failed verification")
 
-            logger.info("system-backup saved path=%s size=%d", destination, local_size, extra=log_extra)
-            logger.info(
-                "remote cleanup disabled; file kept on device file=%s", remote_filename, extra=log_extra
-            )
-            return destination
+            return local_size
         finally:
             if sftp is not None:
                 sftp.close()

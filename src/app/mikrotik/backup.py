@@ -42,12 +42,34 @@ def perform_system_backup(
     if " " in device_name:
         raise ValueError("Device name cannot contain spaces for system backup filename")
 
-    backup_name = f"{device_name}_{timestamp}"
-    backup_filename = f"{backup_name}.backup"
-    destination = backup_dir / "mikrotik" / device_name / backup_filename
-    log_extra = sanitize_log_extra({**log_extra, "backup_file": backup_filename})
-    logger.info("creating system-backup device=%s backup_file=%s", device_name, backup_filename, extra=log_extra)
-    return client.fetch_system_backup(backup_name, destination, logger, log_extra)
+    backup_dir_device = backup_dir / "mikrotik" / device_name
+    remote_filename = f"{device_name}.backup"
+    destination = backup_dir_device / remote_filename
+    log_extra = sanitize_log_extra({**log_extra, "remote_file": remote_filename})
+    logger.info("creating system-backup device=%s remote_file=%s", device_name, remote_filename, extra=log_extra)
+
+    downloaded_size = client.fetch_system_backup(device_name, destination, logger, log_extra)
+
+    if not destination.exists():
+        raise FileNotFoundError(f"Downloaded system-backup not found: {destination}")
+
+    local_size = destination.stat().st_size
+    if local_size <= 0:
+        raise ValueError(f"Downloaded system-backup has zero size: {destination}")
+
+    timestamped_name = f"{device_name}_{timestamp}.backup"
+    timestamped_path = backup_dir_device / timestamped_name
+    destination.rename(timestamped_path)
+
+    log_extra = sanitize_log_extra({**log_extra, "local_file": timestamped_name})
+    logger.info(
+        "system-backup downloaded local_file=%s size=%d",
+        timestamped_name,
+        downloaded_size,
+        extra=log_extra,
+    )
+    logger.info("remote system-backup file kept on device file=%s", remote_filename, extra=log_extra)
+    return timestamped_path
 
 
 def log_mikrotik_diff(current_export: Path, logger: logging.Logger, log_extra: dict[str, str]) -> None:
