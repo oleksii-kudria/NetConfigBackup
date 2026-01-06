@@ -4,7 +4,7 @@
 NetConfigBackup — це CLI-інструмент для резервного копіювання конфігурацій Cisco та MikroTik. Запуск виконується через `scripts/run.py`, який надає підкоманду `backup` та опцію `--debug` для деталізованого логування. Для роботи потрібні інвентаризаційні файли у `config/` та каталоги вивантажень для текстових і бінарних резервних копій.
 
 ## Реалізований функціонал (UA)
-- **Запуск та режими:** CLI `scripts/run.py` з підкомандою `backup`; підтримка `--debug`, що перевизначає рівень логування з `config/local.yml`; опційний прапорець `--mikrotik-system-backup` для створення бінарного бекапу.
+- **Запуск та режими:** CLI `scripts/run.py` з підкомандою `backup`; підтримка `--debug`, що перевизначає рівень логування з `config/local.yml`; опційні прапорці `--mikrotik-system-backup` для створення бінарного бекапу та `--dry-run` для перевірки доступності без зняття конфігів.
 - **Інвентаризація:** читання пристроїв із `config/devices.yml` з єдиною схемою (`name`, `vendor`, `model`, `ip`, `port`, `username`, `secret_ref`); секрети беруться з `config/secrets.yml`.
 - **Локальна конфігурація:** опційний `config/local.yml` (не зберігається в git) для налаштування каталогу резервних копій та логів, а також перемикача `mikrotik.system_backup`; відсутність або помилки читання не блокують роботу.
 - **Логування:** кореневий логер з очищенням секретів, примусовим контекстом `device` та конфігурацією рівня через CLI або `local.yml`; запис у файл і stdout з автоматичним fallback каталогу логів.
@@ -32,6 +32,14 @@ CLI має пріоритет над `local.yml`. За замовчування�
   - `scripts/run.py --mikrotik-system-backup --mikrotik-export backup` → MikroTik system-backup + `/export`
   - `scripts/run.py --mikrotik-system-backup --mikrotik-export --cisco-running-config backup` → MikroTik system-backup + `/export` + Cisco running-config
 - MikroTik прапорці застосовуються лише до `vendor: mikrotik`; Cisco прапорець — лише до `vendor: cisco`.
+
+### Dry-run режим (UA)
+- Запускає всі етапи перевірки (читання конфігів, TCP-доступність, SSH-логін, Cisco enable) без виконання команд бекапу та без створення файлів.
+- Приклади:
+  - `scripts/run.py --dry-run backup`
+  - `scripts/run.py --dry-run --cisco-running-config backup`
+- Дотримується feature flags: перевіряє тільки ті завдання, які були б виконані в реальному запуску.
+- У логах видно: `dry_run=true`, `device=<name> vendor=<vendor> dry_run connection-check start`, `device=<name> ssh connected`, `device=<name> dry_run skipping backup commands`.
 
 ## MikroTik: користувач і права доступу (UA)
 Для збору конфігурацій та системних бекапів потрібен окремий обліковий запис з мінімальними правами. Уникайте використання групи `full` та будь-яких зайвих сервісів (winbox, api, web тощо).
@@ -99,7 +107,7 @@ ssh,ftp,read,write,policy,test,sensitive,\
 NetConfigBackup is a CLI tool for backing up Cisco and MikroTik configurations. It runs via `scripts/run.py`, exposes the `backup` subcommand, and supports a `--debug` flag to elevate logging. The tool relies on inventory files in `config/` and stores both text and binary backups in structured directories.
 
 ## Implemented features (EN)
-- **Execution and modes:** CLI `scripts/run.py` with the `backup` subcommand; `--debug` overrides the logging level configured in `config/local.yml`; optional `--mikrotik-system-backup` flag enables binary backups.
+- **Execution and modes:** CLI `scripts/run.py` with the `backup` subcommand; `--debug` overrides the logging level configured in `config/local.yml`; optional flags `--mikrotik-system-backup` enable binary backups and `--dry-run` validates access without collecting configs.
 - **Inventory:** reads devices from `config/devices.yml` using a unified schema (`name`, `vendor`, `model`, `ip`, `port`, `username`, `secret_ref`); secrets are sourced from `config/secrets.yml`.
 - **Local configuration:** optional `config/local.yml` (kept out of git) to tune backup and logging directories and the `mikrotik.system_backup` switch; missing or unreadable files do not stop execution.
 - **Logging:** root logger scrubs secrets, enforces a `device` context, and respects CLI or `local.yml` levels; writes to file and stdout with automatic fallback for the log directory.
@@ -127,6 +135,14 @@ The CLI flag overrides `local.yml`. By default the feature is disabled and the b
   - `scripts/run.py --mikrotik-system-backup --mikrotik-export backup` → MikroTik system-backup + `/export`
   - `scripts/run.py --mikrotik-system-backup --mikrotik-export --cisco-running-config backup` → MikroTik system-backup + `/export` + Cisco running-config
 - MikroTik flags apply only to `vendor: mikrotik`; the Cisco flag applies only to `vendor: cisco`.
+
+### Dry-run mode (EN)
+- Runs validation steps (config loading, TCP reachability, SSH login, Cisco enable) without issuing backup commands or creating files.
+- Examples:
+  - `scripts/run.py --dry-run backup`
+  - `scripts/run.py --dry-run --cisco-running-config backup`
+- Respects feature flags: only the tasks that would run in a real backup are checked.
+- Logs show: `dry_run=true`, `device=<name> vendor=<vendor> dry_run connection-check start`, `device=<name> ssh connected`, `device=<name> dry_run skipping backup commands`.
 
 ## MikroTik: user and permissions (EN)
 Use a dedicated account with minimal privileges for collecting exports and system backups. Avoid the `full` group and disable unnecessary services (winbox, api, web, etc.).
