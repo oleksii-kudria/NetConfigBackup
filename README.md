@@ -8,6 +8,7 @@ NetConfigBackup — це CLI-інструмент для резервного к
 - **Інвентаризація:** читання пристроїв із `config/devices.yml` з єдиною схемою (`name`, `vendor`, `model`, `ip`, `port`, `username`, `secret_ref`); секрети беруться з `config/secrets.yml`.
 - **Локальна конфігурація:** опційний `config/local.yml` (не зберігається в git) для налаштування каталогу резервних копій та логів, а також перемикача `mikrotik.system_backup`; відсутність або помилки читання не блокують роботу.
 - **Визначення змін:** MikroTik `/export` і Cisco `running-config` порівнюються з попереднім бекапом по нормалізованому тексту; обчислюється `config_changed=true/false/null`, логується SHA256 нормалізованого вмісту (DEBUG) та формується стислий підсумок `added/removed`; при змінах зберігається `.diff` файл поруч із бекапом.
+- **JSON summary:** після кожного запуску формується машиночитний звіт у `<BACKUP_DIR>/summary/run_<YYYY-MM-DD_HHMMSS>.json` із загальними підсумками та деталями по пристроях/задачах (приклад нижче).
 - **Логування:** кореневий логер з очищенням секретів, примусовим контекстом `device` та конфігурацією рівня через CLI або `local.yml`; запис у файл і stdout з автоматичним fallback каталогу логів.
 - **Визначення BACKUP_DIR:** пріоритет `--backup-dir` CLI → `config/local.yml` → запасний `./backup/`; каталог перевіряється на можливість запису з попереджувальними повідомленнями про відмову.
 - **Cisco:** конфігурація знімається з **running-config** командою `show running-config` (startup-config не використовується); перед виконанням вимикається paging через `terminal length 0`, щоб уникнути `--More--`; при обмежених правах можливі WARN про невдале вимкнення paging, але бекап продовжується. Результат зберігається до `<BACKUP_DIR>/cisco/<device>/<YYYY-MM-DD_HHMMSS>_running-config.txt`; після збереження виконується нормалізований diff із попереднім файлом, рахується `added/removed`, створюється `<timestamp>_running-config.diff` при змінах.
@@ -41,6 +42,57 @@ CLI має пріоритет над `local.yml`. За замовчування�
   - `scripts/run.py --dry-run --cisco-running-config backup`
 - Дотримується feature flags: перевіряє тільки ті завдання, які були б виконані в реальному запуску.
 - У логах видно: `dry_run=true`, `device=<name> vendor=<vendor> dry_run connection-check start`, `device=<name> ssh connected`, `device=<name> dry_run skipping backup commands`.
+
+### JSON summary (UA)
+- Файл автоматично створюється після кожного запуску в `<BACKUP_DIR>/summary/run_<YYYY-MM-DD_HHMMSS>.json`.
+- У dry-run поле `dry_run` дорівнює `true`, `saved_path` та `diff_path` залишаються `null`.
+- Містить загальні лічильники та деталізацію по пристроях і задачах:
+  ```json
+  {
+    "run_id": "2025-12-28_121400",
+    "timestamp": "2025-12-28T12:14:00Z",
+    "dry_run": false,
+    "selected_features": ["mikrotik_export", "mikrotik_system_backup", "cisco_running_config"],
+    "totals": {
+      "devices_total": 3,
+      "devices_processed": 3,
+      "devices_success": 2,
+      "devices_failed": 1,
+      "backups_created": 3,
+      "configs_changed": 1
+    },
+    "devices": [
+      {
+        "name": "main-mikrotik",
+        "vendor": "mikrotik",
+        "status": "success",
+        "tasks": {
+          "mikrotik_export": {
+            "performed": true,
+            "saved_path": "backup/mikrotik/main-mikrotik/2025-12-28_121400_export.rsc",
+            "size_bytes": 1234,
+            "config_changed": true,
+            "lines_added": 10,
+            "lines_removed": 2,
+            "diff_path": "backup/mikrotik/main-mikrotik/2025-12-28_121400_export.diff",
+            "error": null
+          },
+          "mikrotik_system_backup": {
+            "performed": true,
+            "saved_path": "backup/mikrotik/main-mikrotik/main-mikrotik_2025-12-28_121400.backup",
+            "size_bytes": 2048,
+            "config_changed": null,
+            "lines_added": null,
+            "lines_removed": null,
+            "diff_path": null,
+            "error": null
+          }
+        }
+      }
+    ]
+  }
+  ```
+- JSON не містить секретів і підходить для інтеграцій (cron/CI, Telegram/Slack алерти).
 
 ## MikroTik: користувач і права доступу (UA)
 Для збору конфігурацій та системних бекапів потрібен окремий обліковий запис з мінімальними правами. Уникайте використання групи `full` та будь-яких зайвих сервісів (winbox, api, web тощо).
@@ -112,6 +164,7 @@ NetConfigBackup is a CLI tool for backing up Cisco and MikroTik configurations. 
 - **Inventory:** reads devices from `config/devices.yml` using a unified schema (`name`, `vendor`, `model`, `ip`, `port`, `username`, `secret_ref`); secrets are sourced from `config/secrets.yml`.
 - **Local configuration:** optional `config/local.yml` (kept out of git) to tune backup and logging directories and the `mikrotik.system_backup` switch; missing or unreadable files do not stop execution.
 - **Change detection:** MikroTik `/export` and Cisco `running-config` are compared against the previous backup using normalized text; `config_changed=true/false/null` is determined, the normalized SHA256 hash is logged at DEBUG, and a concise `added/removed` summary is reported; when changes are present a `.diff` file is written next to the backup.
+- **JSON summary:** after every run the tool writes a machine-readable report to `<BACKUP_DIR>/summary/run_<YYYY-MM-DD_HHMMSS>.json` with overall totals and per-device/per-task details (see example below).
 - **Logging:** root logger scrubs secrets, enforces a `device` context, and respects CLI or `local.yml` levels; writes to file and stdout with automatic fallback for the log directory.
 - **BACKUP_DIR resolution:** priority `--backup-dir` CLI → `config/local.yml` → fallback `./backup/`; each candidate is probed for writability with warnings when falling back.
 - **Cisco:** configuration is taken from **running-config** via `show running-config` (startup-config is not used); paging is disabled first with `terminal length 0` to prevent `--More--`; if the command is rejected due to permissions, a warning is logged and the backup proceeds. Files are written to `<BACKUP_DIR>/cisco/<device>/<YYYY-MM-DD_HHMMSS>_running-config.txt`; after saving, a normalized diff against the previous backup is produced, `added/removed` counts are logged, and `<timestamp>_running-config.diff` is created when changes exist.
@@ -145,6 +198,57 @@ The CLI flag overrides `local.yml`. By default the feature is disabled and the b
   - `scripts/run.py --dry-run --cisco-running-config backup`
 - Respects feature flags: only the tasks that would run in a real backup are checked.
 - Logs show: `dry_run=true`, `device=<name> vendor=<vendor> dry_run connection-check start`, `device=<name> ssh connected`, `device=<name> dry_run skipping backup commands`.
+
+### JSON summary (EN)
+- The tool writes a report to `<BACKUP_DIR>/summary/run_<YYYY-MM-DD_HHMMSS>.json` after every execution.
+- In dry-run the `dry_run` field is `true`, and `saved_path`/`diff_path` remain `null`.
+- The file contains overall totals plus per-device and per-task details:
+  ```json
+  {
+    "run_id": "2025-12-28_121400",
+    "timestamp": "2025-12-28T12:14:00Z",
+    "dry_run": false,
+    "selected_features": ["mikrotik_export", "mikrotik_system_backup", "cisco_running_config"],
+    "totals": {
+      "devices_total": 3,
+      "devices_processed": 3,
+      "devices_success": 2,
+      "devices_failed": 1,
+      "backups_created": 3,
+      "configs_changed": 1
+    },
+    "devices": [
+      {
+        "name": "main-mikrotik",
+        "vendor": "mikrotik",
+        "status": "success",
+        "tasks": {
+          "mikrotik_export": {
+            "performed": true,
+            "saved_path": "backup/mikrotik/main-mikrotik/2025-12-28_121400_export.rsc",
+            "size_bytes": 1234,
+            "config_changed": true,
+            "lines_added": 10,
+            "lines_removed": 2,
+            "diff_path": "backup/mikrotik/main-mikrotik/2025-12-28_121400_export.diff",
+            "error": null
+          },
+          "mikrotik_system_backup": {
+            "performed": true,
+            "saved_path": "backup/mikrotik/main-mikrotik/main-mikrotik_2025-12-28_121400.backup",
+            "size_bytes": 2048,
+            "config_changed": null,
+            "lines_added": null,
+            "lines_removed": null,
+            "diff_path": null,
+            "error": null
+          }
+        }
+      }
+    ]
+  }
+  ```
+- No secrets are written to the JSON, making it suitable for cron/CI integrations or outbound alerts (Telegram/Slack, etc.).
 
 ## MikroTik: user and permissions (EN)
 Use a dedicated account with minimal privileges for collecting exports and system backups. Avoid the `full` group and disable unnecessary services (winbox, api, web, etc.).

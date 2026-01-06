@@ -25,6 +25,7 @@ from app.core.models import Device  # noqa: E402
 from app.core.secrets import SecretEntry, Secrets, SecretNotFoundError, load_secrets, resolve_device_secrets  # noqa: E402
 from app.core.storage import load_local_config, resolve_backup_dir, save_backup_text  # noqa: E402
 from app.mikrotik.backup import fetch_export, log_mikrotik_diff, perform_system_backup  # noqa: E402
+from app.common.run_summary import DeviceResultData, RunSummaryBuilder, TaskResultData  # noqa: E402
 from app.mikrotik.client import MikroTikClient  # noqa: E402
 
 
@@ -163,6 +164,9 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         return 1
 
     logger.debug("total devices loaded=%d", len(devices))
+    run_id = _timestamp()
+    summary = RunSummaryBuilder(run_id=run_id, timestamp=_iso_timestamp(), dry_run=bool(args.dry_run))
+    summary.set_devices_total(len(devices))
     for vendor, count in sorted(Counter(device.vendor for device in devices).items()):
         logger.debug("%s devices selected=%d", vendor, count)
 
@@ -174,6 +178,17 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
     feature_selection = _resolve_feature_selection(args, local_config, logger)
 
     _log_selected_features(feature_selection, logger)
+    summary.set_selected_features(
+        [
+            name
+            for name, enabled in (
+                ("mikrotik_export", feature_selection.mikrotik_export),
+                ("mikrotik_system_backup", feature_selection.mikrotik_system_backup),
+                ("cisco_running_config", feature_selection.cisco_running_config),
+            )
+            if enabled
+        ]
+    )
 
     secrets_path = Path(args.secrets)
     logger.debug("loading secrets from %s", secrets_path)
@@ -183,24 +198,27 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         logger.exception("Failed to load secrets configuration.", extra={"device": "-"})
         return 1
 
+    logger.debug(
+        "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
+    )
+    backup_dir = resolve_backup_dir(args.backup_dir, local_config, logger)
+
     if args.dry_run:
         logger.info("dry_run=true")
         logger.info("dry_run skipping diff")
         stats = DryRunStats()
         for device in devices:
-            _process_device_dry_run(device, secrets, logger, feature_selection, stats)
+            _process_device_dry_run(device, secrets, logger, feature_selection, stats, summary)
         stats.log_summary(logger)
+        _save_run_summary(summary, logger, backup_dir)
         return 0
 
-    logger.debug(
-        "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
-    )
-    backup_dir = resolve_backup_dir(args.backup_dir, local_config, logger)
     logger.info("Starting backup for %d device(s).", len(devices))
 
     for device in devices:
-        _process_device_backup(device, backup_dir, secrets, logger, feature_selection)
+        _process_device_backup(device, backup_dir, secrets, logger, feature_selection, summary)
 
+    _save_run_summary(summary, logger, backup_dir)
     return 0
 
 
@@ -260,7 +278,12 @@ def _format_features_log(
 
 
 def _process_device_backup(
-    device: Device, backup_dir: Path, secrets: Secrets, logger: logging.Logger, feature_selection: FeatureSelection
+    device: Device,
+    backup_dir: Path,
+    secrets: Secrets,
+    logger: logging.Logger,
+    feature_selection: FeatureSelection,
+    summary: RunSummaryBuilder,
 ) -> None:
     """Handle backup for a single device with logging."""
 
@@ -291,6 +314,9 @@ def _process_device_backup(
 
     if not device_tasks:
         logger.info("No selected tasks for device vendor; skipping.", extra=log_extra)
+        summary.add_device(
+            DeviceResultData(name=device.name, vendor=device.vendor, status="skipped", tasks={})
+        )
         return
 
     try:
@@ -302,9 +328,20 @@ def _process_device_backup(
             device.auth.secret_ref,
             extra=log_extra,
         )
+        summary.add_device(
+            DeviceResultData(
+                name=device.name,
+                vendor=device.vendor,
+                status="failed",
+                error="missing_secrets",
+                tasks={},
+            )
+        )
         return
 
     logger.info("device=%s secret_ref=%s secrets_loaded=true", device.name, device.auth.secret_ref, extra=log_extra)
+
+    device_result = DeviceResultData(name=device.name, vendor=device.vendor, status="success", tasks={})
 
     completed_paths: list[Path] = []
     try:
@@ -317,7 +354,17 @@ def _process_device_backup(
                 port=device.port,
                 enable_password=secret_entry.enable_password,
             )
-            completed_paths.append(backup_cisco(client, backup_dir, logger, log_extra))
+            path, diff_outcome, diff_path = backup_cisco(client, backup_dir, logger, log_extra)
+            completed_paths.append(path)
+            device_result.tasks["cisco_running_config"] = TaskResultData(
+                performed=True,
+                saved_path=str(path),
+                size_bytes=path.stat().st_size if path.exists() else None,
+                config_changed=diff_outcome.config_changed,
+                lines_added=diff_outcome.added if diff_outcome.config_changed else None,
+                lines_removed=diff_outcome.removed if diff_outcome.config_changed else None,
+                diff_path=str(diff_path) if diff_path else None,
+            )
         elif device.vendor == "mikrotik":
             logger.info(
                 "start backup device=%s host=%s", device.name, device.host, extra=log_extra
@@ -330,13 +377,19 @@ def _process_device_backup(
                     logger,
                     run_export="mikrotik_export" in device_tasks,
                     run_system_backup="mikrotik_system_backup" in device_tasks,
+                    device_result=device_result,
                 )
             )
         else:
             logger.info("Unknown vendor=%s; skipping.", device.vendor, extra=log_extra)
+            device_result.status = "skipped"
+            summary.add_device(device_result)
             return
-    except Exception:
+    except Exception as exc:
         logger.exception("Backup failed for device.", extra=log_extra)
+        device_result.status = "failed"
+        device_result.error = exc.__class__.__name__
+        summary.add_device(device_result)
         return
 
     if completed_paths:
@@ -346,8 +399,12 @@ def _process_device_backup(
             [str(path) for path in completed_paths],
             extra=log_extra,
         )
+        summary.add_device(device_result)
     else:
         logger.info("Backup finished with no generated files.", extra=log_extra)
+        device_result.status = "failed"
+        device_result.error = device_result.error or "no_files_created"
+        summary.add_device(device_result)
 
 
 def _process_device_dry_run(
@@ -356,6 +413,7 @@ def _process_device_dry_run(
     logger: logging.Logger,
     feature_selection: FeatureSelection,
     stats: DryRunStats,
+    summary: RunSummaryBuilder,
 ) -> None:
     """Validate connectivity and authentication without running backup commands."""
 
@@ -386,6 +444,9 @@ def _process_device_dry_run(
 
     if not device_tasks:
         logger.info("No selected tasks for device vendor; skipping.", extra=log_extra)
+        summary.add_device(
+            DeviceResultData(name=device.name, vendor=device.vendor, status="skipped", tasks={})
+        )
         return
 
     stats.record_attempt()
@@ -399,6 +460,15 @@ def _process_device_dry_run(
             extra=log_extra,
         )
         stats.record_failure()
+        summary.add_device(
+            DeviceResultData(
+                name=device.name,
+                vendor=device.vendor,
+                status="failed",
+                error="missing_secrets",
+                tasks={},
+            )
+        )
         return
 
     logger.info("device=%s secret_ref=%s secrets_loaded=true", device.name, device.auth.secret_ref, extra=log_extra)
@@ -411,14 +481,35 @@ def _process_device_dry_run(
             _dry_run_mikrotik(device, secret_entry, logger, log_extra)
         else:
             logger.info("Unknown vendor=%s; skipping.", device.vendor, extra=log_extra)
+            summary.add_device(
+                DeviceResultData(name=device.name, vendor=device.vendor, status="skipped", tasks={})
+            )
             return
-    except Exception:
+    except Exception as exc:
         logger.exception("Dry run failed for device.", extra=log_extra)
         stats.record_failure()
+        summary.add_device(
+            DeviceResultData(
+                name=device.name,
+                vendor=device.vendor,
+                status="failed",
+                error=exc.__class__.__name__,
+                tasks={},
+            )
+        )
         return
 
     logger.info("device=%s dry_run skipping backup commands", device.name, extra=log_extra)
     stats.record_success()
+    device_result = DeviceResultData(name=device.name, vendor=device.vendor, status="success", tasks={})
+    if "cisco_running_config" in device_tasks:
+        device_result.tasks["cisco_running_config"] = TaskResultData(performed=True)
+    if "mikrotik_export" in device_tasks:
+        device_result.tasks["mikrotik_export"] = TaskResultData(performed=True)
+    if "mikrotik_system_backup" in device_tasks:
+        device_result.tasks["mikrotik_system_backup"] = TaskResultData(performed=True)
+
+    summary.add_device(device_result)
 
 
 def _select_device_tasks(vendor: str, feature_selection: FeatureSelection) -> list[str]:
@@ -487,6 +578,7 @@ def _backup_mikrotik_device(
     logger: logging.Logger,
     run_export: bool,
     run_system_backup: bool,
+    device_result: DeviceResultData,
 ) -> list[Path]:
     log_extra = {"device": device.name}
     logger.debug(
@@ -523,17 +615,35 @@ def _backup_mikrotik_device(
 
         saved_path = save_backup_text(backup_dir, "mikrotik", device.name, filename, export_text, logger, metadata)
         completed.append(saved_path)
-        log_mikrotik_diff(saved_path, logger, log_extra)
+        diff_outcome, diff_path = log_mikrotik_diff(saved_path, logger, log_extra)
+        device_result.tasks["mikrotik_export"] = TaskResultData(
+            performed=True,
+            saved_path=str(saved_path),
+            size_bytes=saved_path.stat().st_size if saved_path.exists() else None,
+            config_changed=diff_outcome.config_changed,
+            lines_added=diff_outcome.added if diff_outcome.config_changed else None,
+            lines_removed=diff_outcome.removed if diff_outcome.config_changed else None,
+            diff_path=str(diff_path) if diff_path else None,
+        )
     else:
         logger.info("MikroTik export skipped", extra=log_extra)
 
     if run_system_backup:
         try:
-            completed.append(perform_system_backup(device, password, timestamp, backup_dir, logger))
+            path = perform_system_backup(device, password, timestamp, backup_dir, logger)
+            completed.append(path)
+            device_result.tasks["mikrotik_system_backup"] = TaskResultData(
+                performed=True,
+                saved_path=str(path),
+                size_bytes=path.stat().st_size if path.exists() else None,
+            )
         except Exception:
             logger.exception("system-backup failed", extra=log_extra)
+            device_result.status = "failed"
+            device_result.tasks["mikrotik_system_backup"] = TaskResultData(performed=True, error="failed")
     else:
         logger.info("mikrotik system-backup disabled (skipping) device=%s", device.name, extra=log_extra)
+        device_result.tasks["mikrotik_system_backup"] = TaskResultData(performed=False)
 
     return completed
 
@@ -591,10 +701,23 @@ def _tcp_check(host: str, port: int, timeout: float = 3.0) -> bool:
             return False
 
 
+def _save_run_summary(summary: RunSummaryBuilder, logger: logging.Logger, backup_dir: Path) -> None:
+    try:
+        summary.save(backup_dir, logger)
+    except Exception:
+        logger.exception("Failed to write run summary JSON.", extra={"device": "-"})
+
+
 def _timestamp() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+
+
+def _iso_timestamp() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 if __name__ == "__main__":

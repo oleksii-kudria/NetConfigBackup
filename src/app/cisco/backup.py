@@ -18,7 +18,7 @@ def backup_device(
     backup_dir: Path,
     logger: logging.Logger | None = None,
     log_extra: dict | None = None,
-) -> Path:
+) -> tuple[Path, DiffOutcome, Path | None]:
     """Perform a backup for a Cisco device and save it to disk."""
 
     resolved_logger = logger or logging.getLogger(__name__)
@@ -56,8 +56,8 @@ def backup_device(
     resolved_logger.info(
         "device=%s running-config saved path=%s size=%d", client.name, backup_path, size, extra=log_extra
     )
-    _log_cisco_diff(backup_path, resolved_logger, log_extra)
-    return backup_path
+    diff_outcome, diff_path = _log_cisco_diff(backup_path, resolved_logger, log_extra)
+    return backup_path, diff_outcome, diff_path
 
 
 def _is_valid_running_config(content: str) -> bool:
@@ -68,7 +68,9 @@ def _is_valid_running_config(content: str) -> bool:
     return any(marker in lowered for marker in ("version", "hostname", "!"))
 
 
-def _log_cisco_diff(current_backup: Path, logger: logging.Logger, log_extra: dict[str, str]) -> None:
+def _log_cisco_diff(
+    current_backup: Path, logger: logging.Logger, log_extra: dict[str, str]
+) -> tuple[DiffOutcome, Path | None]:
     """Log diff status for Cisco running-config backups."""
 
     result: DiffOutcome = evaluate_change(current_backup, "*_running-config.txt", normalize_cisco_running_config)
@@ -92,7 +94,7 @@ def _log_cisco_diff(current_backup: Path, logger: logging.Logger, log_extra: dic
     logger.info("device=%s config_changed=%s", log_extra.get("device", "-"), changed_value, extra=log_extra)
 
     if not result.config_changed:
-        return
+        return result, None
 
     diff_path = current_backup.with_suffix(".diff")
     diff_path.write_text(result.diff_text or "", encoding="utf-8")
@@ -104,3 +106,4 @@ def _log_cisco_diff(current_backup: Path, logger: logging.Logger, log_extra: dic
         diff_path,
         extra=log_extra,
     )
+    return result, diff_path
