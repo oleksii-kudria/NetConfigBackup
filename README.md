@@ -44,6 +44,18 @@ CLI має пріоритет над `local.yml`. За замовчування�
 - Дотримується feature flags: перевіряє тільки ті завдання, які були б виконані в реальному запуску.
 - У логах видно: `dry_run=true`, `device=<name> vendor=<vendor> dry_run connection-check start`, `device=<name> ssh connected`, `device=<name> dry_run skipping backup commands`.
 
+## Приклади використання (UA)
+- `scripts/run.py backup` — запускає стандартний пайплайн: MikroTik `/export` та Cisco `running-config`; system-backup вмикається, якщо зазначено у `local.yml` або CLI. Створюються файли для вибраних завдань.
+- `scripts/run.py --dry-run backup` — виконує перевірки зʼєднання та автентифікації для всіх пристроїв і задач, але **не створює файлів**.
+- `scripts/run.py --mikrotik-export backup` — тільки MikroTik `/export`; MikroTik system-backup та Cisco running-config не запускаються; зберігаються лише `.rsc` файли та diff-и при змінах.
+- `scripts/run.py --mikrotik-system-backup backup` — тільки MikroTik system-backup; MikroTik `/export` і Cisco running-config не виконуються; створюються лише бінарні `.backup` файли.
+- `scripts/run.py --mikrotik-export --mikrotik-system-backup backup` — запускає обидва MikroTik завдання (`/export` + system-backup); Cisco кроки не виконуються; створюються `.rsc` та `.backup` файли.
+- `scripts/run.py --cisco-running-config backup` — тільки Cisco running-config; жодні MikroTik завдання не запускаються; зберігаються текстові конфіги та diff-и при змінах.
+- `scripts/run.py --mikrotik-export --cisco-running-config backup` — MikroTik `/export` + Cisco running-config; MikroTik system-backup не виконується; створюються відповідні текстові файли та diff-и.
+- `scripts/run.py --mikrotik-export --mikrotik-system-backup --cisco-running-config backup` — запуск усіх підтриманих типів: MikroTik `/export`, MikroTik system-backup та Cisco running-config; створюються текстові, бінарні файли та diff-и за змінами.
+- `scripts/run.py --dry-run --cisco-running-config backup` — dry-run лише Cisco running-config; MikroTik завдання не перевіряються; файли не створюються.
+- `scripts/run.py --backup-dir /data/backups backup` — використовує кастомний каталог для всіх бекапів і звітів; запускає стандартний пайплайн завдань; файли створюються у вказаному каталозі.
+
 ### JSON summary (UA)
 - Файл автоматично створюється після кожного запуску в `<BACKUP_DIR>/summary/run_<YYYY-MM-DD_HHMMSS>.json`.
 - У dry-run поле `dry_run` дорівнює `true`, `saved_path` та `diff_path` залишаються `null`.
@@ -210,6 +222,18 @@ The CLI flag overrides `local.yml`. By default the feature is disabled and the b
   - `scripts/run.py --dry-run --cisco-running-config backup`
 - Respects feature flags: only the tasks that would run in a real backup are checked.
 - Logs show: `dry_run=true`, `device=<name> vendor=<vendor> dry_run connection-check start`, `device=<name> ssh connected`, `device=<name> dry_run skipping backup commands`.
+
+## Usage examples (EN)
+- `scripts/run.py backup` — runs the default pipeline: MikroTik `/export` and Cisco `running-config`; system-backup follows CLI or `local.yml`; files are created for the enabled tasks.
+- `scripts/run.py --dry-run backup` — performs connectivity and auth checks for all devices/tasks but **does not create files**.
+- `scripts/run.py --mikrotik-export backup` — MikroTik `/export` only; MikroTik system-backup and Cisco running-config are skipped; writes only `.rsc` files (and diffs when configs change).
+- `scripts/run.py --mikrotik-system-backup backup` — MikroTik system-backup only; MikroTik `/export` and Cisco running-config are not executed; creates only binary `.backup` files.
+- `scripts/run.py --mikrotik-export --mikrotik-system-backup backup` — runs both MikroTik tasks (`/export` + system-backup); Cisco steps are skipped; produces `.rsc` and `.backup` files.
+- `scripts/run.py --cisco-running-config backup` — Cisco running-config only; no MikroTik tasks run; saves text configs and diffs when changes are detected.
+- `scripts/run.py --mikrotik-export --cisco-running-config backup` — runs MikroTik `/export` and Cisco running-config; MikroTik system-backup is skipped; writes the corresponding text files and diffs.
+- `scripts/run.py --mikrotik-export --mikrotik-system-backup --cisco-running-config backup` — runs all supported backup types: MikroTik `/export`, MikroTik system-backup, and Cisco running-config; creates text, binary files, and diffs when applicable.
+- `scripts/run.py --dry-run --cisco-running-config backup` — dry-run for Cisco running-config only; MikroTik tasks are not checked; no files are produced.
+- `scripts/run.py --backup-dir /data/backups backup` — uses a custom directory for all backups and reports; runs the default task set; files are created in the specified path.
 
 ### JSON summary (EN)
 - The tool writes a report to `<BACKUP_DIR>/summary/run_<YYYY-MM-DD_HHMMSS>.json` after every execution.
