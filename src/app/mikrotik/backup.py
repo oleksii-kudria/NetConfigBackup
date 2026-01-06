@@ -9,7 +9,8 @@ from typing import Any
 from app.core.logging import sanitize_log_extra
 from app.core.storage import write_backup
 from app.mikrotik.client import MikroTikClient
-from app.mikrotik.diff import DiffResult, evaluate_config_change
+from app.common.diff import DiffOutcome, evaluate_change
+from app.core.normalize import normalize_mikrotik_export
 
 
 def fetch_export(device: Any, password: str, logger: logging.Logger) -> str:
@@ -76,19 +77,31 @@ def log_mikrotik_diff(current_export: Path, logger: logging.Logger, log_extra: d
     """Log MikroTik diff status for the latest export and persist diff when needed."""
 
     log_extra = sanitize_log_extra(log_extra)
-    result: DiffResult = evaluate_config_change(current_export)
+    result: DiffOutcome = evaluate_change(current_export, "*_export.rsc", normalize_mikrotik_export)
 
-    if result.first_backup:
-        logger.info("first_backup=true", extra=log_extra)
-        return
+    logger.info(
+        "device=%s diff baseline=%s current=%s",
+        log_extra.get("device", "-"),
+        result.previous_path.name if result.previous_path else "-",
+        current_export.name,
+        extra=log_extra,
+    )
 
-    logger.info("config_changed=%s", result.config_changed, extra=log_extra)
+    logger.debug("device=%s normalized_hash=%s", log_extra.get("device", "-"), result.normalized_hash, extra=log_extra)
+
+    changed_value = "null" if result.config_changed is None else str(result.config_changed).lower()
+    logger.info("device=%s config_changed=%s", log_extra.get("device", "-"), changed_value, extra=log_extra)
 
     if not result.config_changed:
         return
 
-    logger.debug("diff added=%d removed=%d", result.added, result.removed, extra=log_extra)
-
     diff_path = current_export.with_suffix(".diff")
     diff_path.write_text(result.diff_text or "", encoding="utf-8")
-    logger.info("diff_saved=%s", diff_path, extra=log_extra)
+    logger.info(
+        "device=%s change_summary added=%d removed=%d diff_file=%s",
+        log_extra.get("device", "-"),
+        result.added,
+        result.removed,
+        diff_path,
+        extra=log_extra,
+    )
