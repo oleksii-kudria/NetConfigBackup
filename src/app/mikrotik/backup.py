@@ -73,7 +73,9 @@ def perform_system_backup(
     return timestamped_path
 
 
-def log_mikrotik_diff(current_export: Path, logger: logging.Logger, log_extra: dict[str, str]) -> None:
+def log_mikrotik_diff(
+    current_export: Path, logger: logging.Logger, log_extra: dict[str, str]
+) -> tuple[DiffOutcome, Path | None]:
     """Log MikroTik diff status for the latest export and persist diff when needed."""
 
     log_extra = sanitize_log_extra(log_extra)
@@ -93,7 +95,7 @@ def log_mikrotik_diff(current_export: Path, logger: logging.Logger, log_extra: d
     logger.info("device=%s config_changed=%s", log_extra.get("device", "-"), changed_value, extra=log_extra)
 
     if not result.config_changed:
-        return
+        return result, None
 
     diff_path = current_export.with_suffix(".diff")
     diff_path.write_text(result.diff_text or "", encoding="utf-8")
@@ -105,3 +107,4 @@ def log_mikrotik_diff(current_export: Path, logger: logging.Logger, log_extra: d
         diff_path,
         extra=log_extra,
     )
+    return result, diff_path
