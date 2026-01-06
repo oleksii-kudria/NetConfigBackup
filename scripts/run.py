@@ -236,20 +236,21 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         logger.exception("Failed to load secrets configuration.", extra={"device": "-"})
         return 2
 
-    logger.debug(
-        "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
-    )
-    backup_dir = resolve_backup_dir(args.backup_dir, local_config, logger)
-
     if args.dry_run:
         logger.info("dry_run=true")
+        logger.debug("dry_run active: backup functions not invoked")
         logger.info("dry_run skipping diff")
         stats = DryRunStats()
         for device in devices:
             _process_device_dry_run(device, secrets, logger, feature_selection, stats, summary)
         stats.log_summary(logger)
-        _save_run_summary(summary, logger, backup_dir)
+        logger.info("dry_run skipping file writes and summary persistence")
         return _calculate_exit_code(summary)
+
+    logger.debug(
+        "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
+    )
+    backup_dir = resolve_backup_dir(args.backup_dir, local_config, logger)
 
     logger.info("Starting backup for %d device(s).", len(devices))
 
@@ -550,7 +551,7 @@ def _process_device_dry_run(
         )
         return
 
-    logger.info("device=%s dry_run skipping backup commands", device.name, extra=log_extra)
+    logger.info("device=%s dry_run skipping backup tasks", device.name, extra=log_extra)
     stats.record_success()
     device_result = DeviceResultData(name=device.name, vendor=device.vendor, status="success", tasks={})
     if "cisco_running_config" in device_tasks:
