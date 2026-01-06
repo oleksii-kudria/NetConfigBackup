@@ -22,9 +22,10 @@ from app.cisco.client import CiscoClient  # noqa: E402
 from app.core.config import load_devices  # noqa: E402
 from app.core.logging import setup_logging  # noqa: E402
 from app.core.models import Device  # noqa: E402
-from app.core.secrets import Secrets, SecretNotFoundError, load_secrets, resolve_device_secrets  # noqa: E402
+from app.core.secrets import SecretEntry, Secrets, SecretNotFoundError, load_secrets, resolve_device_secrets  # noqa: E402
 from app.core.storage import load_local_config, resolve_backup_dir, save_backup_text  # noqa: E402
 from app.mikrotik.backup import fetch_export, log_mikrotik_diff, perform_system_backup  # noqa: E402
+from app.mikrotik.client import MikroTikClient  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,30 @@ class FeatureSelection:
     mikrotik_export: bool
     mikrotik_system_backup: bool
     cisco_running_config: bool
+
+
+@dataclass
+class DryRunStats:
+    devices_checked: int = 0
+    connected: int = 0
+    failures: int = 0
+
+    def record_attempt(self) -> None:
+        self.devices_checked += 1
+
+    def record_success(self) -> None:
+        self.connected += 1
+
+    def record_failure(self) -> None:
+        self.failures += 1
+
+    def log_summary(self, logger: logging.Logger) -> None:
+        logger.info(
+            "dry_run summary devices_checked=%d connected=%d failures=%d backup_commands_executed=false",
+            self.devices_checked,
+            self.connected,
+            self.failures,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -99,7 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     backup_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Show what would be backed up without connecting to devices",
+        help="Validate connectivity and authentication without saving backups",
     )
 
     return parser
@@ -150,10 +175,6 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
 
     _log_selected_features(feature_selection, logger)
 
-    if args.dry_run:
-        logger.info("Dry run requested. Devices to process: %s", [d.name for d in devices])
-        return 0
-
     secrets_path = Path(args.secrets)
     logger.debug("loading secrets from %s", secrets_path)
     try:
@@ -161,6 +182,14 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
     except Exception:
         logger.exception("Failed to load secrets configuration.", extra={"device": "-"})
         return 1
+
+    if args.dry_run:
+        logger.info("dry_run=true")
+        stats = DryRunStats()
+        for device in devices:
+            _process_device_dry_run(device, secrets, logger, feature_selection, stats)
+        stats.log_summary(logger)
+        return 0
 
     logger.debug(
         "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
@@ -320,6 +349,77 @@ def _process_device_backup(
         logger.info("Backup finished with no generated files.", extra=log_extra)
 
 
+def _process_device_dry_run(
+    device: Device,
+    secrets: Secrets,
+    logger: logging.Logger,
+    feature_selection: FeatureSelection,
+    stats: DryRunStats,
+) -> None:
+    """Validate connectivity and authentication without running backup commands."""
+
+    log_extra = {"device": device.name}
+    logger.info("Beginning processing for device.", extra=log_extra)
+    logger.debug(
+        "preparing dry-run for device=%s vendor=%s host=%s port=%s",
+        device.name,
+        device.vendor,
+        device.host,
+        device.port,
+        extra=log_extra,
+    )
+
+    device_tasks = _select_device_tasks(device.vendor, feature_selection)
+    logger.info(
+        "device=%s vendor=%s selected_tasks=%s",
+        device.name,
+        device.vendor,
+        _format_features_log(
+            mikrotik_export="mikrotik_export" in device_tasks,
+            mikrotik_system_backup="mikrotik_system_backup" in device_tasks,
+            cisco_running_config="cisco_running_config" in device_tasks,
+        )
+        or "none",
+        extra=log_extra,
+    )
+
+    if not device_tasks:
+        logger.info("No selected tasks for device vendor; skipping.", extra=log_extra)
+        return
+
+    stats.record_attempt()
+    try:
+        secret_entry = resolve_device_secrets(device.auth.secret_ref, secrets)
+    except SecretNotFoundError:
+        logger.error(
+            "device=%s missing secrets for secret_ref=%s",
+            device.name,
+            device.auth.secret_ref,
+            extra=log_extra,
+        )
+        stats.record_failure()
+        return
+
+    logger.info("device=%s secret_ref=%s secrets_loaded=true", device.name, device.auth.secret_ref, extra=log_extra)
+    logger.info("device=%s vendor=%s dry_run connection-check start", device.name, device.vendor, extra=log_extra)
+
+    try:
+        if device.vendor == "cisco" and "cisco_running_config" in device_tasks:
+            _dry_run_cisco(device, secret_entry, logger, log_extra)
+        elif device.vendor == "mikrotik":
+            _dry_run_mikrotik(device, secret_entry, logger, log_extra)
+        else:
+            logger.info("Unknown vendor=%s; skipping.", device.vendor, extra=log_extra)
+            return
+    except Exception:
+        logger.exception("Dry run failed for device.", extra=log_extra)
+        stats.record_failure()
+        return
+
+    logger.info("device=%s dry_run skipping backup commands", device.name, extra=log_extra)
+    stats.record_success()
+
+
 def _select_device_tasks(vendor: str, feature_selection: FeatureSelection) -> list[str]:
     tasks: list[str] = []
     if vendor == "mikrotik":
@@ -331,6 +431,52 @@ def _select_device_tasks(vendor: str, feature_selection: FeatureSelection) -> li
         if feature_selection.cisco_running_config:
             tasks.append("cisco_running_config")
     return tasks
+
+
+def _dry_run_cisco(device: Device, secret_entry: SecretEntry, logger: logging.Logger, log_extra: dict[str, str]) -> None:
+    client = CiscoClient(
+        host=device.host,
+        name=device.name,
+        username=device.username,
+        password=secret_entry.password,
+        port=device.port,
+        enable_password=secret_entry.enable_password,
+    )
+
+    session = None
+    try:
+        session = client._connect(logger, log_extra)  # noqa: SLF001 - intentional reuse for dry-run
+        logger.info("device=%s ssh connected", device.name, extra=log_extra)
+        client._ensure_enable(session, logger, log_extra)  # noqa: SLF001 - intentional reuse for dry-run
+    finally:
+        if session is not None:
+            session.close()
+
+
+def _dry_run_mikrotik(
+    device: Device, secret_entry: SecretEntry, logger: logging.Logger, log_extra: dict[str, str]
+) -> None:
+    logger.debug(
+        "checking tcp connectivity host=%s port=%s timeout=%s", device.host, device.port, 5, extra=log_extra
+    )
+    if not _tcp_check(device.host, device.port, timeout=5):
+        logger.error(
+            "tcp_check fail host=%s port=%s", device.host, device.port, extra=log_extra
+        )
+        raise ConnectionError(f"TCP check failed for {device.host}:{device.port}")
+
+    logger.info("tcp_check ok host=%s port=%s", device.host, device.port, extra=log_extra)
+    client = MikroTikClient(
+        host=device.host,
+        username=device.username,
+        password=secret_entry.password,
+        port=device.port,
+    )
+    ssh_client = client._connect(logger, log_extra)  # noqa: SLF001 - intentional reuse for dry-run
+    try:
+        logger.info("device=%s ssh connected", device.name, extra=log_extra)
+    finally:
+        ssh_client.close()
 
 
 def _backup_mikrotik_device(
