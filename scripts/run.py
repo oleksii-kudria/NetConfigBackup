@@ -185,8 +185,10 @@ def _process_device_backup(
         if device.vendor == "cisco":
             client = CiscoClient(
                 host=device.host,
+                name=device.name,
                 username=device.username,
                 password=secret_entry.password,
+                port=device.port,
                 enable_password=secret_entry.enable_password,
             )
             output_path = _device_output_path(backup_dir, device, "running-config")
