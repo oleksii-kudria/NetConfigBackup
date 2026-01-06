@@ -25,6 +25,10 @@ class CiscoConnectionError(CiscoClientError):
     """Raised when SSH connection fails."""
 
 
+class CiscoEnableError(CiscoClientError):
+    """Raised when privileged EXEC mode cannot be reached."""
+
+
 def _tcp_check(host: str, port: int, timeout: float) -> bool:
     """Verify TCP reachability for the SSH port."""
 
@@ -70,11 +74,7 @@ class CiscoSSHSession:
         buffer = self._gather_prompt_buffer()
         prompt = _extract_prompt(buffer)
         if prompt is not None:
-            self.prompt = prompt
-            if prompt.endswith("#"):
-                self.prompt_mode = "privileged"
-            elif prompt.endswith(">"):
-                self.prompt_mode = "user"
+            self._update_prompt(prompt)
             self.logger.debug(
                 "device=%s initial prompt detected prompt=%s",
                 self.device_name,
@@ -106,6 +106,71 @@ class CiscoSSHSession:
                 time.sleep(0.1)
 
         return buffer
+
+    def _ensure_channel(self) -> paramiko.Channel:
+        if self.channel is None or self.channel.closed:
+            raise CiscoClientError("SSH channel is not available")
+        return self.channel
+
+    def _update_prompt(self, prompt: str) -> None:
+        self.prompt = prompt
+        if prompt.endswith("#"):
+            self.prompt_mode = "privileged"
+        elif prompt.endswith(">"):
+            self.prompt_mode = "user"
+        else:
+            self.prompt_mode = None
+
+    def wait_for(self, substring: str, timeout: float | None = None) -> str:
+        """Read from the channel until ``substring`` is found or timeout expires."""
+
+        channel = self._ensure_channel()
+        buffer = ""
+        deadline = time.monotonic() + (timeout or self.timeout)
+
+        while time.monotonic() < deadline:
+            if channel.recv_ready():
+                data = channel.recv(4096)
+                buffer += data.decode("utf-8", errors="replace")
+                prompt = _extract_prompt(buffer)
+                if prompt:
+                    self._update_prompt(prompt)
+                if substring in buffer:
+                    return buffer
+            else:
+                time.sleep(0.1)
+        raise TimeoutError(f"Timed out waiting for substring: {substring}")
+
+    def wait_for_prompt(self, timeout: float | None = None) -> str:
+        """Read from the channel until a prompt (``>`` or ``#``) is detected."""
+
+        channel = self._ensure_channel()
+        buffer = ""
+        deadline = time.monotonic() + (timeout or self.timeout)
+
+        while time.monotonic() < deadline:
+            if channel.recv_ready():
+                data = channel.recv(4096)
+                buffer += data.decode("utf-8", errors="replace")
+                prompt = _extract_prompt(buffer)
+                if prompt:
+                    self._update_prompt(prompt)
+                    return buffer
+            else:
+                time.sleep(0.1)
+        raise TimeoutError("Timed out waiting for prompt.")
+
+    def send(self, command: str) -> None:
+        """Send a raw command to the channel with newline."""
+
+        channel = self._ensure_channel()
+        channel.send(command + "\n")
+
+    def run_command(self, command: str) -> str:
+        """Send a command and wait for a prompt, returning the raw buffer."""
+
+        self.send(command)
+        return self.wait_for_prompt()
 
     def close(self) -> None:
         """Close the SSH session and underlying client."""
@@ -195,7 +260,73 @@ class CiscoClient:
         resolved_log_extra = self._log_extra(log_extra)
         try:
             session = self._connect(logger, resolved_log_extra)
-            return "! Cisco running-config placeholder\n"
+            self._ensure_enable(session, logger, resolved_log_extra)
+            self._disable_paging(session, logger, resolved_log_extra)
+            raw_output = session.run_command("show running-config")
+            return _extract_command_output(raw_output, "show running-config")
+        except TimeoutError as exc:
+            raise CiscoClientError("Timed out during Cisco command execution.") from exc
         finally:
             if session is not None:
                 session.close()
+
+    def _ensure_enable(
+        self, session: CiscoSSHSession, logger: logging.Logger, log_extra: Mapping[str, Any]
+    ) -> None:
+        """Move the session to privileged EXEC mode when requested."""
+
+        if session.prompt_mode == "privileged":
+            logger.info("device=%s enable not required (already privileged)", self.name, extra=log_extra)
+            return
+
+        if not self.enable_password:
+            logger.info("device=%s enable skipped (no enable_password)", self.name, extra=log_extra)
+            return
+
+        logger.info("device=%s enable requested", self.name, extra=log_extra)
+        try:
+            session.send("enable")
+            session.wait_for("Password:")
+            session.send(self.enable_password)
+            session.wait_for_prompt()
+        except Exception as exc:
+            logger.error("device=%s enable failed", self.name, extra=log_extra)
+            raise CiscoEnableError("Failed to enter privileged EXEC mode.") from exc
+
+        if session.prompt_mode != "privileged":
+            logger.error("device=%s enable failed", self.name, extra=log_extra)
+            raise CiscoEnableError("Privileged prompt not detected after enable.")
+
+        logger.info("device=%s enable ok", self.name, extra=log_extra)
+
+    def _disable_paging(
+        self, session: CiscoSSHSession, logger: logging.Logger, log_extra: Mapping[str, Any]
+    ) -> None:
+        """Disable paging to capture full command output."""
+
+        logger.debug("device=%s sending terminal length 0", self.name, extra=log_extra)
+        session.run_command("terminal length 0")
+
+
+def _extract_command_output(raw_output: str, command: str) -> str:
+    """Strip echoed command and prompt from raw channel output."""
+
+    lines = raw_output.splitlines()
+    cleaned: list[str] = []
+    command_seen = False
+
+    for line in lines:
+        if not command_seen:
+            if line.strip().startswith(command):
+                command_seen = True
+            continue
+        cleaned.append(line)
+
+    while cleaned and cleaned[-1].strip().endswith((">", "#")):
+        cleaned.pop()
+
+    if not cleaned and lines:
+        cleaned = lines
+
+    output = "\n".join(cleaned).rstrip() + "\n"
+    return output
