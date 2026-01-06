@@ -185,6 +185,7 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
 
     if args.dry_run:
         logger.info("dry_run=true")
+        logger.info("dry_run skipping diff")
         stats = DryRunStats()
         for device in devices:
             _process_device_dry_run(device, secrets, logger, feature_selection, stats)

@@ -9,6 +9,8 @@ from pathlib import Path
 from app.core.logging import sanitize_log_extra
 from app.cisco.client import CiscoClient
 from app.core.storage import ensure_directory
+from app.common.diff import DiffOutcome, evaluate_change
+from app.core.normalize import normalize_cisco_running_config
 
 
 def backup_device(
@@ -54,6 +56,7 @@ def backup_device(
     resolved_logger.info(
         "device=%s running-config saved path=%s size=%d", client.name, backup_path, size, extra=log_extra
     )
+    _log_cisco_diff(backup_path, resolved_logger, log_extra)
     return backup_path
 
 
@@ -63,3 +66,41 @@ def _is_valid_running_config(content: str) -> bool:
 
     lowered = content.lower()
     return any(marker in lowered for marker in ("version", "hostname", "!"))
+
+
+def _log_cisco_diff(current_backup: Path, logger: logging.Logger, log_extra: dict[str, str]) -> None:
+    """Log diff status for Cisco running-config backups."""
+
+    result: DiffOutcome = evaluate_change(current_backup, "*_running-config.txt", normalize_cisco_running_config)
+
+    logger.info(
+        "device=%s diff baseline=%s current=%s",
+        log_extra.get("device", "-"),
+        result.previous_path.name if result.previous_path else "-",
+        current_backup.name,
+        extra=log_extra,
+    )
+
+    logger.debug(
+        "device=%s normalized_hash=%s",
+        log_extra.get("device", "-"),
+        result.normalized_hash,
+        extra=log_extra,
+    )
+
+    changed_value = "null" if result.config_changed is None else str(result.config_changed).lower()
+    logger.info("device=%s config_changed=%s", log_extra.get("device", "-"), changed_value, extra=log_extra)
+
+    if not result.config_changed:
+        return
+
+    diff_path = current_backup.with_suffix(".diff")
+    diff_path.write_text(result.diff_text or "", encoding="utf-8")
+    logger.info(
+        "device=%s change_summary added=%d removed=%d diff_file=%s",
+        log_extra.get("device", "-"),
+        result.added,
+        result.removed,
+        diff_path,
+        extra=log_extra,
+    )
