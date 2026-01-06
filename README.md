@@ -65,13 +65,21 @@ ssh,ftp,read,write,policy,test,sensitive,\
   secrets:
     core-sw-01:
       password: "CHANGE_ME"              # обовʼязково
-      enable_password: "CHANGE_ME_ENABLE"  # опційно
+      enable_password: "CHANGE_ME_ENABLE"  # опційно (для входу у privileged EXEC)
     travel-mikrotik:
       password: "CHANGE_ME"
   ```
 - `config/secrets.yml` виключений з git (див. `.gitignore`), натомість використовуйте `config/secrets.yml.example` як шаблон.
 - `secret_ref` обовʼязковий для кожного пристрою; відсутність файлу або ключа веде до пропуску пристрою з помилкою у логах.
 - Паролі або інші секрети **заборонено** додавати в `devices.yml`; валідатор це перевіряє.
+
+### Cisco: privileged EXEC / enable (UA)
+- Якщо після логіну prompt завершується на `#`, перехід у privileged EXEC не виконується.
+- Для prompt `>`:
+  - якщо в `secrets.yml` заданий `enable_password`, виконується `enable`, очікування `Password:` та prompt `#`;
+  - якщо `enable_password` відсутній, крок пропускається з INFO логом `enable skipped (no enable_password)`.
+- При неправильному паролі або таймауті лог пише `enable failed`, і бекап пристрою пропускається.
+- Без enable команди на кшталт `show running-config` можуть бути недоступні або повертати неповний вивід.
 
 ---
 
@@ -140,10 +148,18 @@ ssh,ftp,read,write,policy,test,sensitive,\
   secrets:
     core-sw-01:
       password: "CHANGE_ME"              # required
-      enable_password: "CHANGE_ME_ENABLE"  # optional
+      enable_password: "CHANGE_ME_ENABLE"  # optional (for privileged EXEC)
     travel-mikrotik:
       password: "CHANGE_ME"
   ```
 - `config/secrets.yml` is ignored by git (see `.gitignore`). Use `config/secrets.yml.example` as a template without real secrets.
 - `secret_ref` is mandatory for each device; when the file or key is missing the device is skipped and an error is logged.
 - Passwords or other secrets **must not** appear in `devices.yml`; validation enforces this.
+
+### Cisco: privileged EXEC / enable (EN)
+- If the login prompt already ends with `#`, the tool does not attempt an enable step.
+- For a `>` prompt:
+  - when `enable_password` is provided in `secrets.yml`, `enable` is executed, `Password:` is awaited, and the `#` prompt is expected;
+  - when `enable_password` is missing, the step is skipped with an INFO log `enable skipped (no enable_password)`.
+- On wrong passwords or timeouts the log records `enable failed` and the device backup is skipped.
+- Without enable, commands such as `show running-config` may be unavailable or return incomplete output.
