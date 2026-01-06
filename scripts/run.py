@@ -9,6 +9,7 @@ import sys
 from collections import Counter
 from typing import Mapping
 from pathlib import Path
+from dataclasses import dataclass
 
 # Ensure src/ is on sys.path for local imports when running as a script
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -26,14 +27,34 @@ from app.core.storage import load_local_config, resolve_backup_dir, save_backup_
 from app.mikrotik.backup import fetch_export, log_mikrotik_diff, perform_system_backup  # noqa: E402
 
 
+@dataclass(frozen=True)
+class FeatureSelection:
+    default_mode: bool
+    mikrotik_export: bool
+    mikrotik_system_backup: bool
+    cisco_running_config: bool
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Create the argument parser for the CLI."""
-    mikrotik_system_backup_parent = argparse.ArgumentParser(add_help=False)
-    mikrotik_system_backup_parent.add_argument(
+    feature_flags_parent = argparse.ArgumentParser(add_help=False)
+    feature_flags_parent.add_argument(
         "--mikrotik-system-backup",
         action="store_true",
         default=argparse.SUPPRESS,
         help="Enable MikroTik binary system backup via /system backup save",
+    )
+    feature_flags_parent.add_argument(
+        "--mikrotik-export",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Run only MikroTik /export text backup",
+    )
+    feature_flags_parent.add_argument(
+        "--cisco-running-config",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Run only Cisco show running-config text backup",
     )
 
     parser = argparse.ArgumentParser(
@@ -41,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Backup utility for Cisco and MikroTik device configurations. "
             "Use this CLI to run configuration backups and manage inventory files."
         ),
-        parents=[mikrotik_system_backup_parent],
+        parents=[feature_flags_parent],
     )
 
     parser.add_argument(
@@ -73,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     backup_parser = subcommands.add_parser(
         "backup",
         help="Run configuration backups for all configured devices",
-        parents=[mikrotik_system_backup_parent],
+        parents=[feature_flags_parent],
     )
     backup_parser.add_argument(
         "--dry-run",
@@ -120,14 +141,18 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
     for vendor, count in sorted(Counter(device.vendor for device in devices).items()):
         logger.debug("%s devices selected=%d", vendor, count)
 
-    if args.dry_run:
-        logger.info("Dry run requested. Devices to process: %s", [d.name for d in devices])
-        return 0
-
     local_config_path = ROOT_DIR / "config" / "local.yml"
     local_config = load_local_config(local_config_path, logger)
     if local_config is not None:
         logger.debug("local config loaded from %s", local_config_path)
+
+    feature_selection = _resolve_feature_selection(args, local_config, logger)
+
+    _log_selected_features(feature_selection, logger)
+
+    if args.dry_run:
+        logger.info("Dry run requested. Devices to process: %s", [d.name for d in devices])
+        return 0
 
     secrets_path = Path(args.secrets)
     logger.debug("loading secrets from %s", secrets_path)
@@ -141,19 +166,71 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
     )
     backup_dir = resolve_backup_dir(args.backup_dir, local_config, logger)
-    system_backup_enabled = _resolve_mikrotik_system_backup(
-        getattr(args, "mikrotik_system_backup", None), local_config, logger
-    )
     logger.info("Starting backup for %d device(s).", len(devices))
 
     for device in devices:
-        _process_device_backup(device, backup_dir, secrets, logger, system_backup_enabled)
+        _process_device_backup(device, backup_dir, secrets, logger, feature_selection)
 
     return 0
 
 
+def _resolve_feature_selection(
+    args: argparse.Namespace, local_config: Mapping[str, object] | None, logger: logging.Logger
+) -> FeatureSelection:
+    """Resolve which backup features are enabled for this run."""
+
+    cli_features = {
+        "mikrotik_export": getattr(args, "mikrotik_export", False),
+        "mikrotik_system_backup": getattr(args, "mikrotik_system_backup", False),
+        "cisco_running_config": getattr(args, "cisco_running_config", False),
+    }
+
+    if any(cli_features.values()):
+        return FeatureSelection(
+            default_mode=False,
+            mikrotik_export=cli_features["mikrotik_export"],
+            mikrotik_system_backup=cli_features["mikrotik_system_backup"],
+            cisco_running_config=cli_features["cisco_running_config"],
+        )
+
+    system_backup_enabled = _resolve_mikrotik_system_backup(
+        getattr(args, "mikrotik_system_backup", None), local_config, logger
+    )
+
+    return FeatureSelection(
+        default_mode=True,
+        mikrotik_export=True,
+        mikrotik_system_backup=system_backup_enabled,
+        cisco_running_config=True,
+    )
+
+
+def _log_selected_features(feature_selection: FeatureSelection, logger: logging.Logger) -> None:
+    if feature_selection.default_mode:
+        logger.info("selected_features=default")
+        return
+
+    enabled = _format_features_log(
+        mikrotik_export=feature_selection.mikrotik_export,
+        mikrotik_system_backup=feature_selection.mikrotik_system_backup,
+        cisco_running_config=feature_selection.cisco_running_config,
+    )
+    logger.info("selected_features=%s", enabled if enabled else "none")
+
+
+def _format_features_log(
+    *, mikrotik_export: bool, mikrotik_system_backup: bool, cisco_running_config: bool
+) -> str:
+    order = (
+        ("mikrotik_export", mikrotik_export),
+        ("mikrotik_system_backup", mikrotik_system_backup),
+        ("cisco_running_config", cisco_running_config),
+    )
+    return ",".join(name for name, enabled in order if enabled)
+
+
 def _process_device_backup(
-    device: Device, backup_dir: Path, secrets: Secrets, logger: logging.Logger, system_backup_enabled: bool
+    device: Device, backup_dir: Path, secrets: Secrets, logger: logging.Logger, feature_selection: FeatureSelection
 ) -> None:
     """Handle backup for a single device with logging."""
 
@@ -168,6 +245,24 @@ def _process_device_backup(
         extra=log_extra,
     )
 
+    device_tasks = _select_device_tasks(device.vendor, feature_selection)
+    logger.info(
+        "device=%s vendor=%s selected_tasks=%s",
+        device.name,
+        device.vendor,
+        _format_features_log(
+            mikrotik_export="mikrotik_export" in device_tasks,
+            mikrotik_system_backup="mikrotik_system_backup" in device_tasks,
+            cisco_running_config="cisco_running_config" in device_tasks,
+        )
+        or "none",
+        extra=log_extra,
+    )
+
+    if not device_tasks:
+        logger.info("No selected tasks for device vendor; skipping.", extra=log_extra)
+        return
+
     try:
         secret_entry = resolve_device_secrets(device.auth.secret_ref, secrets)
     except SecretNotFoundError:
@@ -181,8 +276,9 @@ def _process_device_backup(
 
     logger.info("device=%s secret_ref=%s secrets_loaded=true", device.name, device.auth.secret_ref, extra=log_extra)
 
+    completed_paths: list[Path] = []
     try:
-        if device.vendor == "cisco":
+        if device.vendor == "cisco" and "cisco_running_config" in device_tasks:
             client = CiscoClient(
                 host=device.host,
                 name=device.name,
@@ -191,24 +287,60 @@ def _process_device_backup(
                 port=device.port,
                 enable_password=secret_entry.enable_password,
             )
-            backup_path = backup_cisco(client, backup_dir, logger, log_extra)
-        else:
+            completed_paths.append(backup_cisco(client, backup_dir, logger, log_extra))
+        elif device.vendor == "mikrotik":
             logger.info(
                 "start backup device=%s host=%s", device.name, device.host, extra=log_extra
             )
-            backup_path = _backup_mikrotik_device(
-                device, secret_entry.password, backup_dir, logger, system_backup_enabled
+            completed_paths.extend(
+                _backup_mikrotik_device(
+                    device,
+                    secret_entry.password,
+                    backup_dir,
+                    logger,
+                    run_export="mikrotik_export" in device_tasks,
+                    run_system_backup="mikrotik_system_backup" in device_tasks,
+                )
             )
+        else:
+            logger.info("Unknown vendor=%s; skipping.", device.vendor, extra=log_extra)
+            return
     except Exception:
         logger.exception("Backup failed for device.", extra=log_extra)
         return
 
-    logger.info("Backup completed successfully at %s", backup_path, extra=log_extra)
+    if completed_paths:
+        logger.info(
+            "Backup completed successfully tasks=%s paths=%s",
+            ",".join(device_tasks),
+            [str(path) for path in completed_paths],
+            extra=log_extra,
+        )
+    else:
+        logger.info("Backup finished with no generated files.", extra=log_extra)
+
+
+def _select_device_tasks(vendor: str, feature_selection: FeatureSelection) -> list[str]:
+    tasks: list[str] = []
+    if vendor == "mikrotik":
+        if feature_selection.mikrotik_export:
+            tasks.append("mikrotik_export")
+        if feature_selection.mikrotik_system_backup:
+            tasks.append("mikrotik_system_backup")
+    elif vendor == "cisco":
+        if feature_selection.cisco_running_config:
+            tasks.append("cisco_running_config")
+    return tasks
 
 
 def _backup_mikrotik_device(
-    device: Device, password: str, backup_dir: Path, logger: logging.Logger, system_backup_enabled: bool
-) -> Path:
+    device: Device,
+    password: str,
+    backup_dir: Path,
+    logger: logging.Logger,
+    run_export: bool,
+    run_system_backup: bool,
+) -> list[Path]:
     log_extra = {"device": device.name}
     logger.debug(
         "checking tcp connectivity host=%s port=%s timeout=%s", device.host, device.port, 5, extra=log_extra
@@ -221,38 +353,42 @@ def _backup_mikrotik_device(
 
     logger.info("tcp_check ok host=%s port=%s", device.host, device.port, extra=log_extra)
 
-    export_text = fetch_export(device, password, logger)
-    logger.debug("export received bytes=%d", len(export_text.encode("utf-8")), extra=log_extra)
-
-    if not export_text.strip():
-        raise ValueError("Empty export received from device")
-
     timestamp = _timestamp()
-    filename = f"{timestamp}_export.rsc"
-    metadata = {
-        "device": device.name,
-        "vendor": device.vendor,
-        "model": device.model or "-",
-        "host": device.host,
-        "backup_time": timestamp,
-    }
+    completed: list[Path] = []
+    if run_export:
+        export_text = fetch_export(device, password, logger)
+        logger.debug("export received bytes=%d", len(export_text.encode("utf-8")), extra=log_extra)
 
-    target_path = backup_dir / "mikrotik" / device.name / filename
-    logger.debug("saving backup to %s", target_path, extra=log_extra)
+        if not export_text.strip():
+            raise ValueError("Empty export received from device")
 
-    saved_path = save_backup_text(backup_dir, "mikrotik", device.name, filename, export_text, logger, metadata)
-    log_mikrotik_diff(saved_path, logger, log_extra)
+        filename = f"{timestamp}_export.rsc"
+        metadata = {
+            "device": device.name,
+            "vendor": device.vendor,
+            "model": device.model or "-",
+            "host": device.host,
+            "backup_time": timestamp,
+        }
 
-    if not system_backup_enabled:
+        target_path = backup_dir / "mikrotik" / device.name / filename
+        logger.debug("saving backup to %s", target_path, extra=log_extra)
+
+        saved_path = save_backup_text(backup_dir, "mikrotik", device.name, filename, export_text, logger, metadata)
+        completed.append(saved_path)
+        log_mikrotik_diff(saved_path, logger, log_extra)
+    else:
+        logger.info("MikroTik export skipped", extra=log_extra)
+
+    if run_system_backup:
+        try:
+            completed.append(perform_system_backup(device, password, timestamp, backup_dir, logger))
+        except Exception:
+            logger.exception("system-backup failed", extra=log_extra)
+    else:
         logger.info("mikrotik system-backup disabled (skipping) device=%s", device.name, extra=log_extra)
-        return saved_path
 
-    try:
-        perform_system_backup(device, password, timestamp, backup_dir, logger)
-    except Exception:
-        logger.exception("system-backup failed", extra=log_extra)
-
-    return saved_path
+    return completed
 
 
 def _resolve_mikrotik_system_backup(
