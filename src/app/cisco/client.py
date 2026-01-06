@@ -254,7 +254,7 @@ class CiscoClient:
     def fetch_running_config(
         self, logger: logging.Logger, log_extra: Mapping[str, Any] | None = None
     ) -> str:
-        """Establish SSH session and return placeholder configuration text."""
+        """Establish SSH session and return the raw running-config output."""
 
         session: CiscoSSHSession | None = None
         resolved_log_extra = self._log_extra(log_extra)
@@ -262,8 +262,7 @@ class CiscoClient:
             session = self._connect(logger, resolved_log_extra)
             self._ensure_enable(session, logger, resolved_log_extra)
             self._disable_paging(session, logger, resolved_log_extra)
-            raw_output = session.run_command("show running-config")
-            return _extract_command_output(raw_output, "show running-config")
+            return session.run_command("show running-config")
         except TimeoutError as exc:
             raise CiscoClientError("Timed out during Cisco command execution.") from exc
         finally:

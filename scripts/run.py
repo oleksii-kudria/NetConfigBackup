@@ -191,8 +191,7 @@ def _process_device_backup(
                 port=device.port,
                 enable_password=secret_entry.enable_password,
             )
-            output_path = _device_output_path(backup_dir, device, "running-config")
-            backup_path = backup_cisco(client, output_path, logger, log_extra)
+            backup_path = backup_cisco(client, backup_dir, logger, log_extra)
         else:
             logger.info(
                 "start backup device=%s host=%s", device.name, device.host, extra=log_extra
@@ -205,12 +204,6 @@ def _process_device_backup(
         return
 
     logger.info("Backup completed successfully at %s", backup_path, extra=log_extra)
-
-
-def _device_output_path(base_dir: Path, device: Device, suffix: str) -> Path:
-    """Create a deterministic backup path for a device."""
-
-    return base_dir / device.name / f"{suffix}.txt"
 
 
 def _backup_mikrotik_device(
