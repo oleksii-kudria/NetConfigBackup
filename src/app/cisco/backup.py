@@ -18,7 +18,7 @@ def backup_device(
     log_extra = sanitize_log_extra(log_extra)
     if logger:
         logger.debug("executing command='show running-config'", extra=log_extra)
-    content = client.fetch_running_config()
+    content = client.fetch_running_config(logger or logging.getLogger(__name__), log_extra)
     if logger:
         logger.debug("export received bytes=%d", len(content.encode("utf-8")), extra=log_extra)
         logger.debug("saving backup to %s", output_path, extra=log_extra)
