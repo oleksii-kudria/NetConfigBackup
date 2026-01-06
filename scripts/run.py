@@ -138,18 +138,17 @@ def main(argv: list[str] | None = None) -> int:
     logger = setup_logging(cli_level=logging.DEBUG if args.debug else None)
     logger.info("NetConfigBackup run started.")
 
+    exit_code = 0
     if args.command is None:
         parser.print_help()
-        logger.info("NetConfigBackup run finished.")
-        return 0
-
-    if args.command == "backup":
+    elif args.command == "backup":
         exit_code = _run_backup(args, logger)
-        logger.info("NetConfigBackup run finished.")
-        return exit_code
+    else:
+        parser.error(f"Unknown command: {args.command}")
 
-    parser.error(f"Unknown command: {args.command}")
-    return 2
+    logger.info("exit_code=%d", exit_code)
+    logger.info("NetConfigBackup run finished.")
+    return exit_code
 
 
 def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
@@ -161,7 +160,7 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         devices = load_devices(config_path, logger)
     except Exception:
         logger.exception("Failed to load devices configuration.", extra={"device": "-"})
-        return 1
+        return 2
 
     logger.debug("total devices loaded=%d", len(devices))
     run_id = _timestamp()
@@ -196,7 +195,7 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         secrets = load_secrets(secrets_path, logger)
     except Exception:
         logger.exception("Failed to load secrets configuration.", extra={"device": "-"})
-        return 1
+        return 2
 
     logger.debug(
         "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
@@ -211,7 +210,7 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
             _process_device_dry_run(device, secrets, logger, feature_selection, stats, summary)
         stats.log_summary(logger)
         _save_run_summary(summary, logger, backup_dir)
-        return 0
+        return _calculate_exit_code(summary)
 
     logger.info("Starting backup for %d device(s).", len(devices))
 
@@ -219,6 +218,19 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         _process_device_backup(device, backup_dir, secrets, logger, feature_selection, summary)
 
     _save_run_summary(summary, logger, backup_dir)
+    return _calculate_exit_code(summary)
+
+
+def _calculate_exit_code(summary: RunSummaryBuilder) -> int:
+    """Derive the process exit code from the run summary."""
+
+    success_detected = summary.devices_success > 0 if summary.dry_run else summary.backups_created > 0
+    if not success_detected:
+        return 2
+
+    if summary.devices_failed > 0:
+        return 1
+
     return 0
 
 
