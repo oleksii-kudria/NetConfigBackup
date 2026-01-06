@@ -83,12 +83,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run only Cisco show running-config text backup",
     )
 
+    examples = """
+Examples:
+  scripts/run.py backup
+      Run default backup pipeline
+
+  scripts/run.py --dry-run backup
+      Validate connectivity and authentication without creating backups
+
+  scripts/run.py --mikrotik-export backup
+      Run only MikroTik export backups
+
+  scripts/run.py --mikrotik-system-backup backup
+      Run only MikroTik system backup
+
+  scripts/run.py --mikrotik-export --mikrotik-system-backup backup
+      Run MikroTik export and system backup
+
+  scripts/run.py --cisco-running-config backup
+      Run only Cisco running-config backups
+
+  scripts/run.py --mikrotik-export --cisco-running-config backup
+      Run MikroTik export and Cisco running-config backups
+
+  scripts/run.py --mikrotik-export --mikrotik-system-backup --cisco-running-config backup
+      Run all supported backup types
+
+  scripts/run.py --dry-run --cisco-running-config backup
+      Dry-run Cisco backup pipeline
+
+  scripts/run.py --backup-dir /data/backups backup
+      Store backups in custom directory
+    """
+
     parser = argparse.ArgumentParser(
         description=(
             "Backup utility for Cisco and MikroTik device configurations. "
             "Use this CLI to run configuration backups and manage inventory files."
         ),
         parents=[feature_flags_parent],
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=examples,
     )
 
     parser.add_argument(
@@ -121,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
         "backup",
         help="Run configuration backups for all configured devices",
         parents=[feature_flags_parent],
+        formatter_class=argparse.RawTextHelpFormatter,
     )
     backup_parser.add_argument(
         "--dry-run",
@@ -136,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     logger = setup_logging(cli_level=logging.DEBUG if args.debug else None)
+    logger.info("cli_examples_available=true")
     logger.info("NetConfigBackup run started.")
 
     exit_code = 0
