@@ -19,17 +19,34 @@ def _trim_trailing_blank_lines(lines: list[str]) -> list[str]:
     return lines
 
 
+_MIKROTIK_VOLATILE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^#\s*backup_time:.*", re.IGNORECASE),
+    re.compile(r"^#\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+by\s+RouterOS\b.*", re.IGNORECASE),
+)
+
+
+def _is_volatile_mikrotik_line(line: str) -> bool:
+    return any(pattern.match(line) for pattern in _MIKROTIK_VOLATILE_PATTERNS)
+
+
 def normalize_mikrotik_export(text: str) -> str:
     """Normalize MikroTik export text.
 
     - unify line endings
     - rstrip each line
+    - drop backup timestamps
     - drop blank lines at the end
     """
 
     normalized = _normalize_line_endings(text)
-    lines = [line.rstrip() for line in normalized.split("\n")]
-    trimmed = _trim_trailing_blank_lines(lines)
+    lines = normalized.split("\n")
+    filtered: list[str] = []
+    for line in lines:
+        trimmed_line = line.rstrip()
+        if _is_volatile_mikrotik_line(trimmed_line):
+            continue
+        filtered.append(trimmed_line)
+    trimmed = _trim_trailing_blank_lines(filtered)
     return "\n".join(trimmed)
 
 
