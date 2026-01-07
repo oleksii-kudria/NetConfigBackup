@@ -80,28 +80,52 @@ def log_mikrotik_diff(
 
     log_extra = sanitize_log_extra(log_extra)
     result: DiffOutcome = evaluate_change(current_export, "*_export.rsc", normalize_mikrotik_export)
+    device_name = log_extra.get("device", "-")
+    current_path = result.current_path or current_export.resolve()
+
+    if device_name not in ("", "-") and current_path.parent.name != device_name:
+        logger.error(
+            "device=%s device_path_mismatch expected=%s actual=%s current_path=%s",
+            device_name,
+            device_name,
+            current_path.parent.name,
+            current_path,
+            extra=log_extra,
+        )
+        raise ValueError(f"Device path mismatch for {device_name}: {current_path}")
 
     logger.info(
-        "device=%s diff baseline=%s current=%s",
-        log_extra.get("device", "-"),
-        result.previous_path.name if result.previous_path else "-",
-        current_export.name,
+        "device=%s diff baseline_path=%s current_path=%s",
+        device_name,
+        str(result.previous_path) if result.previous_path else "-",
+        current_path,
         extra=log_extra,
     )
 
-    logger.debug("device=%s normalized_hash=%s", log_extra.get("device", "-"), result.normalized_hash, extra=log_extra)
+    logger.debug(
+        "device=%s baseline_size_bytes=%s current_size_bytes=%s baseline_sha256=%s current_sha256=%s baseline_lines=%s current_lines=%s",
+        device_name,
+        result.baseline_size_bytes if result.baseline_size_bytes is not None else 0,
+        result.current_size_bytes if result.current_size_bytes is not None else 0,
+        result.baseline_sha256 or "-",
+        result.current_sha256 or "-",
+        result.baseline_lines if result.baseline_lines is not None else 0,
+        result.current_lines if result.current_lines is not None else 0,
+        extra=log_extra,
+    )
+    logger.debug("device=%s normalized_hash=%s", device_name, result.normalized_hash, extra=log_extra)
 
     changed_value = "null" if result.config_changed is None else str(result.config_changed).lower()
-    logger.info("device=%s config_changed=%s", log_extra.get("device", "-"), changed_value, extra=log_extra)
+    logger.info("device=%s config_changed=%s", device_name, changed_value, extra=log_extra)
 
     if not result.config_changed:
         return result, None
 
-    diff_path = current_export.with_suffix(".diff")
+    diff_path = current_path.with_suffix(".diff")
     diff_path.write_text(result.diff_text or "", encoding="utf-8")
     logger.info(
         "device=%s change_summary added=%d removed=%d diff_file=%s",
-        log_extra.get("device", "-"),
+        device_name,
         result.added,
         result.removed,
         diff_path,
