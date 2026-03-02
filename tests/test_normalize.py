@@ -22,7 +22,7 @@ add name=bridge1
 """
 
         self.assertEqual(
-            "# backup_metadata\n# device: r1\n# vendor: mikrotik\n# backup_time: 2026-01-06_224908\n\n/interface bridge\nadd name=bridge1",
+            "# backup_metadata\n# device: r1\n# vendor: mikrotik\n\n/interface bridge\nadd name=bridge1",
             normalize_mikrotik_export(text),
         )
 
@@ -30,7 +30,15 @@ add name=bridge1
         text = "# 2026-01-07 00:49:07 by RouterOS 7.19\r\n# software id = ABCD-1234  \r\n/ip address\r\nadd address=10.0.0.1/24 interface=ether1  \r\n\r\n\r\n"
 
         self.assertEqual(
-            "# 2026-01-07 00:49:07 by RouterOS 7.19\n# software id = ABCD-1234\n/ip address\nadd address=10.0.0.1/24 interface=ether1",
+            "# software id = ABCD-1234\n/ip address\nadd address=10.0.0.1/24 interface=ether1",
+            normalize_mikrotik_export(text),
+        )
+
+    def test_ignores_locale_timestamp_comment_line(self) -> None:
+        text = "# mar/02/2026 10:43:41 by RouterOS 6.49.6\n/interface bridge\nadd name=bridge1\n"
+
+        self.assertEqual(
+            "/interface bridge\nadd name=bridge1",
             normalize_mikrotik_export(text),
         )
 

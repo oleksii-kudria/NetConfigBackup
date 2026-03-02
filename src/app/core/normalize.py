@@ -22,6 +22,7 @@ def _trim_trailing_blank_lines(lines: list[str]) -> list[str]:
 _MIKROTIK_VOLATILE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^#\s*backup_time:.*", re.IGNORECASE),
     re.compile(r"^#\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+by\s+RouterOS\b.*", re.IGNORECASE),
+    re.compile(r"^#\s*[a-z]{3}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}\s+by\s+RouterOS\b.*", re.IGNORECASE),
 )
 
 
