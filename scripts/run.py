@@ -17,13 +17,13 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from app.cisco.backup import backup_device as backup_cisco  # noqa: E402
+from app.cisco.backup import backup_arp_table, backup_device as backup_cisco  # noqa: E402
 from app.cisco.client import CiscoClient  # noqa: E402
 from app.core.config import load_devices  # noqa: E402
 from app.core.logging import setup_logging  # noqa: E402
 from app.core.models import Device  # noqa: E402
 from app.core.secrets import SecretEntry, Secrets, SecretNotFoundError, load_secrets, resolve_device_secrets  # noqa: E402
-from app.core.storage import load_local_config, resolve_backup_dir, save_backup_text  # noqa: E402
+from app.core.storage import load_local_config, resolve_arp_dir, resolve_backup_dir, save_backup_text  # noqa: E402
 from app.mikrotik.backup import fetch_export, log_mikrotik_diff, perform_system_backup  # noqa: E402
 from app.common.run_summary import DeviceResultData, RunSummaryBuilder, TaskResultData  # noqa: E402
 from app.mikrotik.client import MikroTikClient  # noqa: E402
@@ -35,6 +35,7 @@ class FeatureSelection:
     mikrotik_export: bool
     mikrotik_system_backup: bool
     cisco_running_config: bool
+    cisco_arp: bool
 
 
 @dataclass
@@ -82,6 +83,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="Run only Cisco show running-config text backup",
     )
+    feature_flags_parent.add_argument(
+        "--cisco-arp",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Collect Cisco ARP table via show ip arp",
+    )
 
     dry_run_parent = argparse.ArgumentParser(add_help=False)
     dry_run_parent.add_argument(
@@ -110,6 +117,12 @@ Examples:
 
   scripts/run.py --cisco-running-config backup
       Run only Cisco running-config backups
+
+  scripts/run.py --cisco-arp
+      Collect ARP tables from Cisco devices (show ip arp)
+
+  scripts/run.py --cisco-arp --cisco-running-config backup
+      Collect Cisco ARP and running-config in a single run
 
   scripts/run.py --mikrotik-export --cisco-running-config backup
       Run MikroTik export and Cisco running-config backups
@@ -179,7 +192,14 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("NetConfigBackup run started.")
 
     exit_code = 0
-    if args.command is None:
+    has_feature_only_run = any(
+        bool(getattr(args, attr, False))
+        for attr in ("mikrotik_export", "mikrotik_system_backup", "cisco_running_config", "cisco_arp", "dry_run")
+    )
+    if args.command is None and has_feature_only_run:
+        logger.info("command=backup implicit=true")
+        exit_code = _run_backup(args, logger)
+    elif args.command is None:
         parser.print_help()
     elif args.command == "backup":
         exit_code = _run_backup(args, logger)
@@ -218,6 +238,7 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
     feature_selection = _resolve_feature_selection(args, local_config, logger)
 
     _log_selected_features(feature_selection, logger)
+    logger.info("cisco_arp=%s", str(feature_selection.cisco_arp).lower())
     summary.set_selected_features(
         [
             name
@@ -225,6 +246,7 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
                 ("mikrotik_export", feature_selection.mikrotik_export),
                 ("mikrotik_system_backup", feature_selection.mikrotik_system_backup),
                 ("cisco_running_config", feature_selection.cisco_running_config),
+                ("cisco_arp", feature_selection.cisco_arp),
             )
             if enabled
         ]
@@ -253,11 +275,12 @@ def _run_backup(args: argparse.Namespace, logger: logging.Logger) -> int:
         "resolving backup directory cli_arg=%s local_yml_present=%s", args.backup_dir, local_config is not None
     )
     backup_dir = resolve_backup_dir(args.backup_dir, local_config, logger)
+    arp_dir = resolve_arp_dir(local_config, logger)
 
     logger.info("Starting backup for %d device(s).", len(devices))
 
     for device in devices:
-        _process_device_backup(device, backup_dir, secrets, logger, feature_selection, summary)
+        _process_device_backup(device, backup_dir, arp_dir, secrets, logger, feature_selection, summary)
 
     _save_run_summary(summary, logger, backup_dir)
     return _calculate_exit_code(summary)
@@ -285,6 +308,7 @@ def _resolve_feature_selection(
         "mikrotik_export": getattr(args, "mikrotik_export", False),
         "mikrotik_system_backup": getattr(args, "mikrotik_system_backup", False),
         "cisco_running_config": getattr(args, "cisco_running_config", False),
+        "cisco_arp": getattr(args, "cisco_arp", False),
     }
 
     if any(cli_features.values()):
@@ -293,6 +317,7 @@ def _resolve_feature_selection(
             mikrotik_export=cli_features["mikrotik_export"],
             mikrotik_system_backup=cli_features["mikrotik_system_backup"],
             cisco_running_config=cli_features["cisco_running_config"],
+            cisco_arp=cli_features["cisco_arp"],
         )
 
     system_backup_enabled = _resolve_mikrotik_system_backup(
@@ -304,6 +329,7 @@ def _resolve_feature_selection(
         mikrotik_export=True,
         mikrotik_system_backup=system_backup_enabled,
         cisco_running_config=True,
+        cisco_arp=False,
     )
 
 
@@ -316,17 +342,19 @@ def _log_selected_features(feature_selection: FeatureSelection, logger: logging.
         mikrotik_export=feature_selection.mikrotik_export,
         mikrotik_system_backup=feature_selection.mikrotik_system_backup,
         cisco_running_config=feature_selection.cisco_running_config,
+        cisco_arp=feature_selection.cisco_arp,
     )
     logger.info("selected_features=%s", enabled if enabled else "none")
 
 
 def _format_features_log(
-    *, mikrotik_export: bool, mikrotik_system_backup: bool, cisco_running_config: bool
+    *, mikrotik_export: bool, mikrotik_system_backup: bool, cisco_running_config: bool, cisco_arp: bool
 ) -> str:
     order = (
         ("mikrotik_export", mikrotik_export),
         ("mikrotik_system_backup", mikrotik_system_backup),
         ("cisco_running_config", cisco_running_config),
+        ("cisco_arp", cisco_arp),
     )
     return ",".join(name for name, enabled in order if enabled)
 
@@ -334,6 +362,7 @@ def _format_features_log(
 def _process_device_backup(
     device: Device,
     backup_dir: Path,
+    arp_dir: Path,
     secrets: Secrets,
     logger: logging.Logger,
     feature_selection: FeatureSelection,
@@ -361,6 +390,7 @@ def _process_device_backup(
             mikrotik_export="mikrotik_export" in device_tasks,
             mikrotik_system_backup="mikrotik_system_backup" in device_tasks,
             cisco_running_config="cisco_running_config" in device_tasks,
+            cisco_arp="cisco_arp" in device_tasks,
         )
         or "none",
         extra=log_extra,
@@ -399,7 +429,7 @@ def _process_device_backup(
 
     completed_paths: list[Path] = []
     try:
-        if device.vendor == "cisco" and "cisco_running_config" in device_tasks:
+        if device.vendor == "cisco":
             client = CiscoClient(
                 host=device.host,
                 name=device.name,
@@ -408,17 +438,26 @@ def _process_device_backup(
                 port=device.port,
                 enable_password=secret_entry.enable_password,
             )
-            path, diff_outcome, diff_path = backup_cisco(client, backup_dir, logger, log_extra)
-            completed_paths.append(path)
-            device_result.tasks["cisco_running_config"] = TaskResultData(
-                performed=True,
-                saved_path=str(path),
-                size_bytes=path.stat().st_size if path.exists() else None,
-                config_changed=diff_outcome.config_changed,
-                lines_added=diff_outcome.added if diff_outcome.config_changed else None,
-                lines_removed=diff_outcome.removed if diff_outcome.config_changed else None,
-                diff_path=str(diff_path) if diff_path else None,
-            )
+            if "cisco_running_config" in device_tasks:
+                path, diff_outcome, diff_path = backup_cisco(client, backup_dir, logger, log_extra)
+                completed_paths.append(path)
+                device_result.tasks["cisco_running_config"] = TaskResultData(
+                    performed=True,
+                    saved_path=str(path),
+                    size_bytes=path.stat().st_size if path.exists() else None,
+                    config_changed=diff_outcome.config_changed,
+                    lines_added=diff_outcome.added if diff_outcome.config_changed else None,
+                    lines_removed=diff_outcome.removed if diff_outcome.config_changed else None,
+                    diff_path=str(diff_path) if diff_path else None,
+                )
+            if "cisco_arp" in device_tasks:
+                arp_path = backup_arp_table(client, arp_dir, logger, log_extra)
+                completed_paths.append(arp_path)
+                device_result.tasks["cisco_arp"] = TaskResultData(
+                    performed=True,
+                    saved_path=str(arp_path),
+                    size_bytes=arp_path.stat().st_size if arp_path.exists() else None,
+                )
         elif device.vendor == "mikrotik":
             logger.info(
                 "start backup device=%s host=%s", device.name, device.host, extra=log_extra
@@ -491,6 +530,7 @@ def _process_device_dry_run(
             mikrotik_export="mikrotik_export" in device_tasks,
             mikrotik_system_backup="mikrotik_system_backup" in device_tasks,
             cisco_running_config="cisco_running_config" in device_tasks,
+            cisco_arp="cisco_arp" in device_tasks,
         )
         or "none",
         extra=log_extra,
@@ -529,7 +569,7 @@ def _process_device_dry_run(
     logger.info("device=%s vendor=%s dry_run connection-check start", device.name, device.vendor, extra=log_extra)
 
     try:
-        if device.vendor == "cisco" and "cisco_running_config" in device_tasks:
+        if device.vendor == "cisco" and ({"cisco_running_config", "cisco_arp"} & set(device_tasks)):
             _dry_run_cisco(device, secret_entry, logger, log_extra)
         elif device.vendor == "mikrotik":
             _dry_run_mikrotik(device, secret_entry, logger, log_extra)
@@ -554,10 +594,14 @@ def _process_device_dry_run(
         return
 
     logger.info("device=%s dry_run skipping backup tasks", device.name, extra=log_extra)
+    if "cisco_arp" in device_tasks:
+        logger.info("device=%s dry_run skipping cisco arp", device.name, extra=log_extra)
     stats.record_success()
     device_result = DeviceResultData(name=device.name, vendor=device.vendor, status="success", tasks={})
     if "cisco_running_config" in device_tasks:
         device_result.tasks["cisco_running_config"] = TaskResultData(performed=True)
+    if "cisco_arp" in device_tasks:
+        device_result.tasks["cisco_arp"] = TaskResultData(performed=True)
     if "mikrotik_export" in device_tasks:
         device_result.tasks["mikrotik_export"] = TaskResultData(performed=True)
     if "mikrotik_system_backup" in device_tasks:
@@ -576,6 +620,8 @@ def _select_device_tasks(vendor: str, feature_selection: FeatureSelection) -> li
     elif vendor == "cisco":
         if feature_selection.cisco_running_config:
             tasks.append("cisco_running_config")
+        if feature_selection.cisco_arp:
+            tasks.append("cisco_arp")
     return tasks
 
 

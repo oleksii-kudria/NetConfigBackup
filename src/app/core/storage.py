@@ -10,6 +10,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FALLBACK_BACKUP_DIR = PROJECT_ROOT / "backup"
+DEFAULT_ARP_DIR = Path("./arp")
 DEFAULT_LOCAL_CONFIG = PROJECT_ROOT / "config" / "local.yml"
 
 
@@ -122,6 +123,23 @@ def _extract_local_backup_dir(local_cfg: Mapping[str, Any] | None) -> Path | Non
     return candidate
 
 
+def _extract_local_arp_dir(local_cfg: Mapping[str, Any] | None) -> Path | None:
+    """Return arp.directory from local.yml mapping when present."""
+
+    if not isinstance(local_cfg, Mapping):
+        return None
+
+    arp_section = local_cfg.get("arp")
+    if not isinstance(arp_section, Mapping):
+        return None
+
+    directory_value = arp_section.get("directory")
+    if not directory_value:
+        return None
+
+    return Path(directory_value).expanduser()
+
+
 def resolve_backup_dir(
     cli_backup_dir: str | Path | None, local_cfg: Mapping[str, Any] | None, logger: logging.Logger
 ) -> Path:
@@ -165,3 +183,29 @@ def resolve_backup_dir(
         logger.info("backup_dir source=fallback path=%s", FALLBACK_BACKUP_DIR)
 
     return FALLBACK_BACKUP_DIR
+
+
+def resolve_arp_dir(local_cfg: Mapping[str, Any] | None, logger: logging.Logger) -> Path:
+    """Resolve the ARP output directory from local.yml or default ./arp."""
+
+    configured_dir = _extract_local_arp_dir(local_cfg)
+    if configured_dir:
+        ok, reason = _probe_directory(configured_dir)
+        if ok:
+            logger.info("arp_dir source=local_yml path=%s", configured_dir)
+            return configured_dir
+        logger.warning(
+            'arp_dir source=local_yml path=%s fallback=%s reason="%s"',
+            configured_dir,
+            DEFAULT_ARP_DIR,
+            reason or "unavailable",
+        )
+
+    ok, reason = _probe_directory(DEFAULT_ARP_DIR)
+    if not ok:
+        logger.error('arp_dir path=%s reason="%s"', DEFAULT_ARP_DIR, reason or "unavailable")
+        raise OSError(f"Unable to use ARP directory: {DEFAULT_ARP_DIR}")
+
+    source = "default" if configured_dir is None else "fallback"
+    logger.info("arp_dir source=%s path=%s", source, DEFAULT_ARP_DIR)
+    return DEFAULT_ARP_DIR
