@@ -60,6 +60,48 @@ def backup_device(
     return backup_path, diff_outcome, diff_path
 
 
+
+def backup_arp_table(
+    client: CiscoClient,
+    arp_dir: Path,
+    logger: logging.Logger | None = None,
+    log_extra: dict | None = None,
+) -> Path:
+    """Collect Cisco ARP table and save it to disk."""
+
+    resolved_logger = logger or logging.getLogger(__name__)
+    sanitized_extra = sanitize_log_extra(log_extra)
+    log_extra = {"device": client.name, **sanitized_extra}
+
+    resolved_logger.info("device=%s collecting cisco arp", client.name, extra=log_extra)
+    try:
+        content = client.fetch_arp_table(resolved_logger, log_extra)
+    except Exception:
+        resolved_logger.error("device=%s cisco arp collection failed", client.name, extra=log_extra)
+        raise
+
+    if not content.strip():
+        resolved_logger.error("device=%s cisco arp collection failed", client.name, extra=log_extra)
+        raise ValueError("Empty ARP output received from device.")
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+    target_dir = ensure_directory(arp_dir / "cisco" / client.name)
+    backup_path = target_dir / f"{timestamp}_arp.txt"
+
+    if backup_path.exists():
+        resolved_logger.error("device=%s cisco arp collection failed", client.name, extra=log_extra)
+        raise FileExistsError(f"ARP file already exists: {backup_path}")
+
+    backup_path.write_text(content, encoding="utf-8")
+    size = backup_path.stat().st_size if backup_path.exists() else 0
+    if size <= 0:
+        resolved_logger.error("device=%s cisco arp collection failed", client.name, extra=log_extra)
+        raise ValueError("ARP file is empty after write.")
+
+    resolved_logger.info("device=%s cisco arp saved path=%s size=%d", client.name, backup_path, size, extra=log_extra)
+    return backup_path
+
+
 def _is_valid_running_config(content: str) -> bool:
     if not content or not content.strip():
         return False
